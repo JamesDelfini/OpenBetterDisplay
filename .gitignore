@@ -1,1 +1,12 @@
+# Reference assets & disk images
 temp/
+*.dmg
+
+# SwiftPM & Xcode build artifacts
+.build/
+build/
+DerivedData/
+.swiftpm/
+
+# macOS metadata
+.DS_Store

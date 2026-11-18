@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] Running the app places a monitor icon in the macOS system menu bar (without a Dock icon) and opens a dark translucent popover when clicked.
-- [ ] Every connected display appears as a rounded header pill showing a laptop icon for the built-in display, a monitor icon for external displays, and the display's human-readable product name.
-- [ ] The current Main Display displays an active `M` badge next to its name.
-- [ ] Plugging in, unplugging, or reconfiguring displays updates the menu bar display list in real time.
-- [ ] The popover footer includes a working `Launch at Login` toggle and a `Quit OpenBetterDisplay` button.
-- [ ] The repository includes an MIT license, documentation for building and packaging the `.app` bundle from the command line or Xcode, and git ignore rules that exclude proprietary disk images and build artifacts.
-- [ ] Behavioral tests exercise `DisplayCoordinator` across the `DisplayDriver` seam using an in-memory `FakeDisplayDriver` to verify multi-display discovery, human-readable naming, built-in vs. external classification, and Main Display identification.
+- [x] Running the app places a monitor icon in the macOS system menu bar (without a Dock icon) and opens a dark translucent popover when clicked.
+- [x] Every connected display appears as a rounded header pill showing a laptop icon for the built-in display, a monitor icon for external displays, and the display's human-readable product name.
+- [x] The current Main Display displays an active `M` badge next to its name.
+- [x] Plugging in, unplugging, or reconfiguring displays updates the menu bar display list in real time.
+- [x] The popover footer includes a working `Launch at Login` toggle and a `Quit OpenBetterDisplay` button.
+- [x] The repository includes an MIT license, documentation for building and packaging the `.app` bundle from the command line or Xcode, and git ignore rules that exclude proprietary disk images and build artifacts.
+- [x] Behavioral tests exercise `DisplayCoordinator` across the `DisplayDriver` seam using an in-memory `FakeDisplayDriver` to verify multi-display discovery, human-readable naming, built-in vs. external classification, and Main Display identification.

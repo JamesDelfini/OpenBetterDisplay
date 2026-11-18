@@ -10,3 +10,7 @@ DerivedData/
 
 # macOS metadata
 .DS_Store
+
+# Local worktrees
+.worktrees/
+

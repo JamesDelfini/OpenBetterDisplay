@@ -49,6 +49,9 @@ public final class FakeDisplayDriver: DisplayDriver, @unchecked Sendable {
 
     public func setDisplayMode(_ displayID: UInt32, modeID: Int32) throws {
         setModeHistory.append((displayID: displayID, modeID: modeID))
+        if let index = onlineDisplays.firstIndex(where: { $0.displayID == displayID }) {
+            onlineDisplays[index].currentModeID = modeID
+        }
     }
 
     public func resetSoftwareGamma() {

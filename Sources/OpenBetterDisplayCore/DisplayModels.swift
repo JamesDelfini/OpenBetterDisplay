@@ -136,6 +136,28 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         Int((brightness * 100.0).rounded())
     }
 
+    public var activeOrPreviewMode: DisplayModeOption? {
+        if let previewModeID,
+           let preview = availableModes.first(where: { $0.modeID == previewModeID }) {
+            return preview
+        }
+        if let current = availableModes.first(where: { $0.modeID == currentModeID }) {
+            return current
+        }
+        return availableModes.first(where: { $0.scalePercentage == 100 }) ?? availableModes.last
+    }
+
+    public var activeOrPreviewModeIndex: Int? {
+        guard let targetID = activeOrPreviewMode?.modeID else {
+            return nil
+        }
+        return availableModes.firstIndex(where: { $0.modeID == targetID })
+    }
+
+    public var resolutionLabel: String {
+        activeOrPreviewMode?.label ?? ""
+    }
+
     public init(
         displayID: UInt32,
         name: String,

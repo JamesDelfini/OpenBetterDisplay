@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify build and tests
+        run: |
+          swift build --disable-sandbox -Xswiftc -warnings-as-errors
+          make test-quiet
+
+      - name: Build and package app bundle
+        env:
+          APP_VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION="${APP_VERSION#v}"
+          APP_VERSION="${VERSION}" make app
+
+          ASSET_NAME="OpenBetterDisplay-${GITHUB_REF_NAME}-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/OpenBetterDisplay.app \
+            "build/${ASSET_NAME}"
+
+          (cd build && shasum -a 256 "${ASSET_NAME}" > "${ASSET_NAME}.sha256")
+          echo "ASSET_NAME=${ASSET_NAME}" >> "${GITHUB_ENV}"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > release-notes.md <<EOF
+          ## OpenBetterDisplay ${GITHUB_REF_NAME}
+
+          Lightweight open-source replacement for BetterDisplay on macOS: manage built-in and external monitors from the menu bar — OS-level display disconnect, Apple Silicon DDC/CI hardware brightness, HiDPI resolution scaling, and Main Display switching, with macOS private display APIs documented.
+
+          ### Highlights
+          - **Dark Translucent Menu Bar Popover** with human-readable monitor names, laptop/external icons, and **Main Display Badge** (\`M\`) exclusively on the **Main Display**
+          - **OS-Level Display Disconnect** (\`CGSConfigureDisplayEnabled\`) with Main Display & last-Enabled-Display guardrails, **Reconnect All Displays**, and automatic restore on wake-from-sleep and quit
+          - **Main Display Switching** via each display's collapsible disclosure drawer (\`⌄\`), closing the popover synchronously before macOS relocates the menu bar
+          - **3-Tier Brightness Control:** native Apple backlight (\`DisplayServices\`) synced with macOS brightness keys, Apple Silicon DDC/CI (\`IOAVService\` VCP \`0x10\`) with throttling & cooldown recovery, and automatic software gamma fallback with per-display persistence
+          - **HiDPI Resolution Slider & Mode Picker:** native aspect-ratio & refresh-rate filtering, live drag preview without flickering, release-to-commit, and clickable mode dropdown
+
+          ### Installation
+          1. Download and unzip \`${ASSET_NAME}\`.
+          2. Move \`OpenBetterDisplay.app\` to \`/Applications\`.
+          3. Because this release is ad-hoc signed (not notarized with an Apple Developer ID), clear the macOS quarantine attribute on first launch:
+             \`\`\`bash
+             xattr -dr com.apple.quarantine /Applications/OpenBetterDisplay.app
+             \`\`\`
+          EOF
+
+          gh release create "${GITHUB_REF_NAME}" \
+            "build/${ASSET_NAME}" \
+            "build/${ASSET_NAME}.sha256" \
+            --title "OpenBetterDisplay ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md

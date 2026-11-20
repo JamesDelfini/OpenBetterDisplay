@@ -1,9 +1,20 @@
-import Foundation
 import Combine
+import Foundation
 
 @MainActor
 public final class DisplayCoordinator: ObservableObject {
     @Published public private(set) var displays: [DisplayState] = []
+
+    private struct DDCThrottleState {
+        var pendingLevel: Double?
+        var scheduledToken: BrightnessWriteCancellable?
+        var lastWriteTime: TimeInterval?
+        var inFlightLevel: Double?
+
+        var activeTargetLevel: Double? {
+            pendingLevel ?? inFlightLevel
+        }
+    }
 
     private let driver: DisplayDriver
     private let brightnessStore: BrightnessPersistence
@@ -13,10 +24,7 @@ public final class DisplayCoordinator: ObservableObject {
     private var disconnectedDisplays: [UInt32: RawDisplayInfo] = [:]
     private var knownEnabledDisplayIDs: Set<UInt32> = []
     private var persistenceKeysByDisplayID: [UInt32: String] = [:]
-    private var pendingDDCLevels: [UInt32: Double] = [:]
-    private var scheduledDDCTokens: [UInt32: AnyObject] = [:]
-    private var lastDDCWriteTime: [UInt32: TimeInterval] = [:]
-    private var inFlightDDCLevels: [UInt32: Double] = [:]
+    private var ddcThrottleStates: [UInt32: DDCThrottleState] = [:]
 
     public var hasDisconnectedDisplays: Bool {
         displays.contains(where: { !$0.isEnabled })
@@ -90,8 +98,7 @@ public final class DisplayCoordinator: ObservableObject {
             )
             do {
                 try driver.setDisplayEnabled(displayID, enabled: false)
-                cancelPendingDDCWrite(for: displayID)
-                lastDDCWriteTime.removeValue(forKey: displayID)
+                resetDDCThrottleState(for: displayID)
                 var cached = rawToCache
                 cached.isActive = false
                 cached.isMain = false
@@ -192,8 +199,7 @@ public final class DisplayCoordinator: ObservableObject {
         })
         let removedEnabledIDs = knownEnabledDisplayIDs.subtracting(currentEnabledIDs)
         for removedID in removedEnabledIDs {
-            cancelPendingDDCWrite(for: removedID)
-            lastDDCWriteTime.removeValue(forKey: removedID)
+            resetDDCThrottleState(for: removedID)
         }
 
         let enabledCount = currentEnabledIDs.count
@@ -203,57 +209,60 @@ public final class DisplayCoordinator: ObservableObject {
             let isEnabled = currentEnabledIDs.contains(raw.displayID)
             let isMain = isEnabled && raw.isMain
             let canToggleOff = isEnabled && !isMain && enabledCount > 1
-            let availableModes = Self.filterDisplayModes(for: raw)
-            let resolvedCurrentModeID = Self.resolveCurrentModeID(for: raw, availableModes: availableModes)
+            let availableModes = DisplayModeFilter.filterModes(for: raw)
+            let currentModeOption = DisplayModeFilter.resolveCurrentModeOption(for: raw, availableModes: availableModes)
 
             let persistenceKey = Self.persistenceKey(for: raw)
             updatedKeys[raw.displayID] = persistenceKey
 
-            let brightness: Double
-            let backend: BrightnessBackendUsed
-
-            if !isEnabled {
-                if let previous = previousDisplaysByID[raw.displayID] {
-                    brightness = previous.brightness
-                    backend = previous.brightnessBackend
-                } else if let savedLevel = brightnessStore.brightness(forKey: persistenceKey) {
-                    brightness = max(0.0, min(1.0, savedLevel))
-                    backend = raw.isBuiltIn ? .nativeAppleBacklight : .hardwareDDC
-                } else {
-                    brightness = 1.0
-                    backend = raw.isBuiltIn ? .nativeAppleBacklight : .hardwareDDC
-                }
-            } else if let activeDDCLevel = pendingDDCLevels[raw.displayID] ?? inFlightDDCLevels[raw.displayID] {
-                brightness = activeDDCLevel
-                backend = .hardwareDDC
-            } else if !knownEnabledDisplayIDs.contains(raw.displayID),
-                      let savedLevel = brightnessStore.brightness(forKey: persistenceKey) {
-                let clampedSaved = max(0.0, min(1.0, savedLevel))
-                backend = driver.setBrightness(raw.displayID, level: clampedSaved)
-                brightness = clampedSaved
-            } else {
-                let reading = driver.getBrightness(raw.displayID)
-                brightness = max(0.0, min(1.0, reading.level))
-                backend = reading.backend
-            }
+            let (brightness, backend) = resolveBrightnessState(
+                for: raw,
+                isEnabled: isEnabled,
+                persistenceKey: persistenceKey,
+                previousDisplay: previousDisplaysByID[raw.displayID]
+            )
 
             return DisplayState(
                 displayID: raw.displayID,
-                name: Self.humanReadableName(for: raw),
+                name: DisplayNameFormatter.format(
+                    rawName: raw.name,
+                    isBuiltIn: raw.isBuiltIn,
+                    vendorID: raw.vendorID,
+                    modelID: raw.modelID
+                ),
                 isBuiltIn: raw.isBuiltIn,
                 isMain: isMain,
                 isEnabled: isEnabled,
                 canToggleOff: canToggleOff,
-                symbolName: raw.isBuiltIn ? "laptopcomputer" : "display",
                 brightness: brightness,
                 brightnessBackend: backend,
                 availableModes: availableModes,
-                currentModeID: resolvedCurrentModeID
+                currentModeID: raw.currentModeID,
+                currentModeOption: currentModeOption
             )
         }
 
         persistenceKeysByDisplayID = updatedKeys
         knownEnabledDisplayIDs = currentEnabledIDs
+    }
+
+    /// Lightweight sync for built-in displays while the popover is visible,
+    /// reflecting macOS brightness-key / Control Center changes without polling external DDC monitors.
+    public func syncBuiltInBrightness() {
+        for index in displays.indices where displays[index].isBuiltIn && displays[index].isEnabled {
+            let displayID = displays[index].displayID
+            let reading = driver.getBrightness(displayID)
+            let clamped = max(0.0, min(1.0, reading.level))
+            if abs(clamped - displays[index].brightness) > 0.001 {
+                displays[index].brightness = clamped
+                if let persistenceKey = persistenceKeysByDisplayID[displayID] {
+                    brightnessStore.setBrightness(clamped, forKey: persistenceKey)
+                }
+            }
+            if displays[index].brightnessBackend != reading.backend {
+                displays[index].brightnessBackend = reading.backend
+            }
+        }
     }
 
     public func setBrightness(_ displayID: UInt32, level: Double) {
@@ -273,98 +282,15 @@ public final class DisplayCoordinator: ObservableObject {
         displays[index].brightness = clamped
 
         if displays[index].brightnessBackend == .hardwareDDC, ddcThrottleInterval > 0 {
-            pendingDDCLevels[displayID] = clamped
+            var state = ddcThrottleStates[displayID] ?? DDCThrottleState()
+            state.pendingLevel = clamped
+            ddcThrottleStates[displayID] = state
             scheduleOrFlushDDCWrite(for: displayID)
         } else {
             cancelPendingDDCWrite(for: displayID)
             let backend = driver.setBrightness(displayID, level: clamped)
             displays[index].brightnessBackend = backend
         }
-    }
-
-    private func scheduleOrFlushDDCWrite(for displayID: UInt32) {
-        guard inFlightDDCLevels[displayID] == nil else { return }
-
-        let now = writeScheduler.now()
-        if let lastWrite = lastDDCWriteTime[displayID] {
-            let elapsed = now - lastWrite
-            if elapsed < ddcThrottleInterval {
-                if scheduledDDCTokens[displayID] == nil {
-                    let remaining = ddcThrottleInterval - elapsed
-                    let token = writeScheduler.schedule(after: remaining) { [weak self] in
-                        guard let self else { return }
-                        self.scheduledDDCTokens.removeValue(forKey: displayID)
-                        self.flushDDCWrite(for: displayID)
-                    }
-                    scheduledDDCTokens[displayID] = token
-                }
-                return
-            }
-        }
-
-        if let token = scheduledDDCTokens.removeValue(forKey: displayID) {
-            writeScheduler.cancel(token)
-        }
-        flushDDCWrite(for: displayID)
-    }
-
-    private func flushDDCWrite(for displayID: UInt32) {
-        guard let targetLevel = pendingDDCLevels.removeValue(forKey: displayID) else { return }
-        guard knownEnabledDisplayIDs.contains(displayID) else { return }
-
-        inFlightDDCLevels[displayID] = targetLevel
-        lastDDCWriteTime[displayID] = writeScheduler.now()
-
-        let driver = self.driver
-        writeScheduler.performWrite({
-            driver.setBrightness(displayID, level: targetLevel)
-        }) { [weak self] backend in
-            guard let self else { return }
-            self.inFlightDDCLevels.removeValue(forKey: displayID)
-
-            if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
-                self.displays[index].brightnessBackend = backend
-            }
-
-            if self.pendingDDCLevels[displayID] != nil {
-                if backend == .hardwareDDC, self.ddcThrottleInterval > 0 {
-                    self.scheduleOrFlushDDCWrite(for: displayID)
-                } else if let trailingLevel = self.pendingDDCLevels.removeValue(forKey: displayID) {
-                    let nextBackend = self.driver.setBrightness(displayID, level: trailingLevel)
-                    if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
-                        self.displays[index].brightnessBackend = nextBackend
-                    }
-                }
-            }
-        }
-    }
-
-    private func cancelPendingDDCWrite(for displayID: UInt32) {
-        pendingDDCLevels.removeValue(forKey: displayID)
-        if let token = scheduledDDCTokens.removeValue(forKey: displayID) {
-            writeScheduler.cancel(token)
-        }
-    }
-
-    private func cancelAllPendingDDCWrites() {
-        for token in scheduledDDCTokens.values {
-            writeScheduler.cancel(token)
-        }
-        scheduledDDCTokens.removeAll()
-        pendingDDCLevels.removeAll()
-    }
-
-    private static func persistenceKey(for raw: RawDisplayInfo) -> String {
-        if raw.isBuiltIn {
-            return "builtin"
-        }
-        if raw.serialNumber != 0 {
-            return String(format: "hardware:%04X:%04X:%08X", raw.vendorID, raw.modelID, raw.serialNumber)
-        }
-        if raw.vendorID != 0 || raw.modelID != 0 {
-            return String(format: "display:%04X:%04X:%u", raw.vendorID, raw.modelID, raw.displayID)
-        }
-        return "display:\(raw.displayID)"
     }
 
     public func previewResolution(_ displayID: UInt32, modeID: Int32) {
@@ -414,210 +340,157 @@ public final class DisplayCoordinator: ObservableObject {
         do {
             try driver.setDisplayMode(displayID, modeID: targetModeID)
             displays[index].currentModeID = targetModeID
+            displays[index].currentModeOption = displays[index].availableModes.first(where: { $0.modeID == targetModeID })
             lastKnownRawDisplays[displayID]?.currentModeID = targetModeID
         } catch {
             // Preserve currentModeID if macOS rejects the display mode switch.
         }
     }
 
-    private static func resolveCurrentModeID(
+    // MARK: - Private Brightness Helpers
+
+    private func resolveBrightnessState(
         for raw: RawDisplayInfo,
-        availableModes: [DisplayModeOption]
-    ) -> Int32 {
-        if availableModes.contains(where: { $0.modeID == raw.currentModeID }) {
-            return raw.currentModeID
+        isEnabled: Bool,
+        persistenceKey: String,
+        previousDisplay: DisplayState?
+    ) -> (Double, BrightnessBackendUsed) {
+        if !isEnabled {
+            if let previousDisplay {
+                return (previousDisplay.brightness, previousDisplay.brightnessBackend)
+            }
+            if let savedLevel = brightnessStore.brightness(forKey: persistenceKey) {
+                return (max(0.0, min(1.0, savedLevel)), raw.isBuiltIn ? .nativeAppleBacklight : .hardwareDDC)
+            }
+            return (1.0, raw.isBuiltIn ? .nativeAppleBacklight : .hardwareDDC)
         }
-        if let activeRaw = raw.modes.first(where: { $0.modeID == raw.currentModeID }),
-           let matchingOption = availableModes.first(where: {
-               $0.width == activeRaw.width && $0.height == activeRaw.height
-           }) {
-            return matchingOption.modeID
+
+        if raw.isBuiltIn {
+            let reading = driver.getBrightness(raw.displayID)
+            let level = max(0.0, min(1.0, reading.level))
+            let previousLevel = previousDisplay?.brightness
+            let persistedLevel = brightnessStore.brightness(forKey: persistenceKey)
+            let changedFromPrevious = previousLevel.map { abs($0 - level) > 0.001 } ?? false
+            let differsFromPersisted = persistedLevel.map { abs($0 - level) > 0.001 } ?? false
+            if changedFromPrevious || differsFromPersisted {
+                brightnessStore.setBrightness(level, forKey: persistenceKey)
+            }
+            return (level, reading.backend)
         }
-        return availableModes.first(where: { $0.scalePercentage == 100 })?.modeID
-            ?? availableModes.last?.modeID
-            ?? raw.currentModeID
+
+        if let activeDDCLevel = ddcThrottleStates[raw.displayID]?.activeTargetLevel {
+            return (activeDDCLevel, .hardwareDDC)
+        }
+
+        if !knownEnabledDisplayIDs.contains(raw.displayID),
+           let savedLevel = brightnessStore.brightness(forKey: persistenceKey) {
+            let clampedSaved = max(0.0, min(1.0, savedLevel))
+            let backend = driver.setBrightness(raw.displayID, level: clampedSaved)
+            return (clampedSaved, backend)
+        }
+
+        let reading = driver.getBrightness(raw.displayID)
+        return (max(0.0, min(1.0, reading.level)), reading.backend)
     }
 
-    private static func filterDisplayModes(for raw: RawDisplayInfo) -> [DisplayModeOption] {
-        let usableModes = raw.modes.filter {
-            $0.isUsableForDesktopGUI && $0.width > 0 && $0.height > 0 && $0.pixelWidth > 0 && $0.pixelHeight > 0
-        }
-        guard !usableModes.isEmpty else {
-            return []
-        }
+    private func scheduleOrFlushDDCWrite(for displayID: UInt32) {
+        var state = ddcThrottleStates[displayID] ?? DDCThrottleState()
+        guard state.inFlightLevel == nil else { return }
 
-        let (nativePixelWidth, nativePixelHeight) = resolveNativePixelDimensions(for: raw, usableModes: usableModes)
-        let nativeAspect = Double(nativePixelWidth) / Double(nativePixelHeight)
-
-        let aspectMatching = usableModes.filter { mode in
-            let aspect = Double(mode.width) / Double(mode.height)
-            return abs(aspect - nativeAspect) <= 0.025
-        }
-        let aspectFiltered = aspectMatching.isEmpty ? usableModes : aspectMatching
-
-        let activeRawMode = raw.modes.first(where: { $0.modeID == raw.currentModeID })
-        let candidatePool: [RawDisplayMode]
-        if let activeRate = activeRawMode?.refreshRate {
-            if activeRate <= 0.5 {
-                let variableRateModes = aspectFiltered.filter { $0.refreshRate <= 0.5 }
-                if variableRateModes.count >= 2 || variableRateModes.count == aspectFiltered.count {
-                    candidatePool = variableRateModes
-                } else {
-                    candidatePool = aspectFiltered
+        let now = writeScheduler.now()
+        if let lastWrite = state.lastWriteTime {
+            let elapsed = now - lastWrite
+            if elapsed < ddcThrottleInterval {
+                if state.scheduledToken == nil {
+                    let remaining = ddcThrottleInterval - elapsed
+                    state.scheduledToken = writeScheduler.schedule(after: remaining) { [weak self] in
+                        guard let self else { return }
+                        self.ddcThrottleStates[displayID]?.scheduledToken = nil
+                        self.flushDDCWrite(for: displayID)
+                    }
+                    ddcThrottleStates[displayID] = state
                 }
-            } else {
-                let matchingRateModes = aspectFiltered.filter { abs($0.refreshRate - activeRate) <= 0.5 }
-                candidatePool = matchingRateModes.isEmpty ? aspectFiltered : matchingRateModes
+                return
             }
-        } else if aspectFiltered.allSatisfy({ $0.refreshRate <= 0.5 }) {
-            candidatePool = aspectFiltered
-        } else {
-            let maxRate = aspectFiltered.map(\.refreshRate).max() ?? 60.0
-            let matchingRateModes = aspectFiltered.filter { abs($0.refreshRate - maxRate) <= 0.5 }
-            candidatePool = matchingRateModes.isEmpty ? aspectFiltered : matchingRateModes
         }
 
-        let hiDPICandidates = candidatePool.filter { $0.pixelWidth > $0.width }
-        let standardCandidates = candidatePool.filter { $0.pixelWidth <= $0.width }
-        let isActiveModeHiDPI = activeRawMode.map { $0.pixelWidth > $0.width } ?? false
-        let isRetinaOrHighDensityPanel = (raw.isBuiltIn && nativePixelWidth >= 2560)
-            || nativePixelWidth >= 3000
-            || (isActiveModeHiDPI && hiDPICandidates.count >= 2)
+        if let token = state.scheduledToken {
+            token.cancel()
+            state.scheduledToken = nil
+            ddcThrottleStates[displayID] = state
+        }
+        flushDDCWrite(for: displayID)
+    }
 
-        let preferredModes: [RawDisplayMode]
-        if !hiDPICandidates.isEmpty && (isRetinaOrHighDensityPanel || standardCandidates.isEmpty) {
-            preferredModes = hiDPICandidates
-        } else {
-            preferredModes = standardCandidates.isEmpty ? candidatePool : standardCandidates
+    private func flushDDCWrite(for displayID: UInt32) {
+        guard var state = ddcThrottleStates[displayID],
+              let targetLevel = state.pendingLevel else {
+            return
+        }
+        state.pendingLevel = nil
+        guard knownEnabledDisplayIDs.contains(displayID) else {
+            ddcThrottleStates[displayID] = state
+            return
         }
 
-        var deduplicatedByResolution: [String: RawDisplayMode] = [:]
-        for mode in preferredModes {
-            let key = "\(mode.width)x\(mode.height)"
-            if let existing = deduplicatedByResolution[key] {
-                if mode.modeID == raw.currentModeID {
-                    deduplicatedByResolution[key] = mode
-                } else if existing.modeID != raw.currentModeID {
-                    if mode.pixelWidth > existing.pixelWidth
-                        || (mode.pixelWidth == existing.pixelWidth && mode.refreshRate > existing.refreshRate) {
-                        deduplicatedByResolution[key] = mode
+        state.inFlightLevel = targetLevel
+        state.lastWriteTime = writeScheduler.now()
+        ddcThrottleStates[displayID] = state
+
+        let driver = self.driver
+        writeScheduler.performWrite({
+            driver.setBrightness(displayID, level: targetLevel)
+        }) { [weak self] backend in
+            guard let self else { return }
+            self.ddcThrottleStates[displayID]?.inFlightLevel = nil
+
+            if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
+                self.displays[index].brightnessBackend = backend
+            }
+
+            if self.ddcThrottleStates[displayID]?.pendingLevel != nil {
+                if backend == .hardwareDDC, self.ddcThrottleInterval > 0 {
+                    self.scheduleOrFlushDDCWrite(for: displayID)
+                } else if let trailingLevel = self.ddcThrottleStates[displayID]?.pendingLevel {
+                    self.ddcThrottleStates[displayID]?.pendingLevel = nil
+                    let nextBackend = self.driver.setBrightness(displayID, level: trailingLevel)
+                    if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
+                        self.displays[index].brightnessBackend = nextBackend
                     }
                 }
-            } else {
-                deduplicatedByResolution[key] = mode
             }
-        }
-
-        let sortedModes = deduplicatedByResolution.values.sorted { lhs, rhs in
-            let lhsArea = lhs.width * lhs.height
-            let rhsArea = rhs.width * rhs.height
-            if lhsArea != rhsArea {
-                return lhsArea < rhsArea
-            }
-            return lhs.width < rhs.width
-        }
-
-        return sortedModes.map { mode in
-            let isHiDPI = mode.pixelWidth > mode.width
-            let scalePercentage: Int
-            if isHiDPI {
-                scalePercentage = Int(((Double(mode.width) * 2.0) / Double(nativePixelWidth) * 100.0).rounded())
-            } else {
-                scalePercentage = Int(((Double(mode.width) / Double(nativePixelWidth)) * 100.0).rounded())
-            }
-            let label: String
-            if isHiDPI && scalePercentage != 100 {
-                label = "\(mode.width)x\(mode.height) · \(scalePercentage)%"
-            } else {
-                label = "\(mode.width)x\(mode.height)"
-            }
-            return DisplayModeOption(
-                modeID: mode.modeID,
-                width: mode.width,
-                height: mode.height,
-                pixelWidth: mode.pixelWidth,
-                pixelHeight: mode.pixelHeight,
-                refreshRate: mode.refreshRate,
-                isHiDPI: isHiDPI,
-                scalePercentage: scalePercentage,
-                label: label
-            )
         }
     }
 
-    private static func resolveNativePixelDimensions(
-        for raw: RawDisplayInfo,
-        usableModes: [RawDisplayMode]
-    ) -> (Int, Int) {
-        let nativeFlaggedModes = usableModes.filter(\.isNative)
-        if let native1x = nativeFlaggedModes.first(where: { $0.pixelWidth == $0.width && $0.pixelHeight == $0.height }) {
-            return (native1x.pixelWidth, native1x.pixelHeight)
-        }
-        if let nativeMode = nativeFlaggedModes.first {
-            return (nativeMode.pixelWidth, nativeMode.pixelHeight)
-        }
-
-        let maxLogicalWidth = usableModes.map(\.width).max() ?? 0
-        let oneXModes = usableModes.filter { $0.pixelWidth == $0.width && $0.pixelHeight == $0.height }
-        if let active = usableModes.first(where: { $0.modeID == raw.currentModeID }) {
-            let activeAspect = Double(active.width) / Double(active.height)
-            let matchingActiveAspect1x = oneXModes
-                .filter { abs((Double($0.width) / Double($0.height)) - activeAspect) <= 0.025 }
-                .max(by: { ($0.width * $0.height) < ($1.width * $1.height) })
-            if let matchingActiveAspect1x,
-               Double(matchingActiveAspect1x.pixelWidth) >= Double(maxLogicalWidth) * 0.90 {
-                return (matchingActiveAspect1x.pixelWidth, matchingActiveAspect1x.pixelHeight)
-            }
-        }
-
-        if let highest1x = oneXModes.max(by: { ($0.width * $0.height) < ($1.width * $1.height) }),
-           highest1x.pixelWidth >= maxLogicalWidth {
-            return (highest1x.pixelWidth, highest1x.pixelHeight)
-        }
-
-        let twoXModes = usableModes.filter { $0.pixelWidth == $0.width * 2 && $0.pixelWidth >= 2560 }
-        if let base2x = twoXModes.min(by: { ($0.pixelWidth * $0.pixelHeight) < ($1.pixelWidth * $1.pixelHeight) }) {
-            return (base2x.pixelWidth, base2x.pixelHeight)
-        }
-
-        if let highest1x = oneXModes.max(by: { ($0.width * $0.height) < ($1.width * $1.height) }) {
-            return (highest1x.pixelWidth, highest1x.pixelHeight)
-        }
-
-        if let active = usableModes.first(where: { $0.modeID == raw.currentModeID }) {
-            return (active.pixelWidth, active.pixelHeight)
-        }
-
-        if let largest = usableModes.max(by: { ($0.pixelWidth * $0.pixelHeight) < ($1.pixelWidth * $1.pixelHeight) }) {
-            return (largest.pixelWidth, largest.pixelHeight)
-        }
-
-        return (1920, 1080)
+    private func cancelPendingDDCWrite(for displayID: UInt32) {
+        guard var state = ddcThrottleStates[displayID] else { return }
+        state.pendingLevel = nil
+        state.scheduledToken?.cancel()
+        state.scheduledToken = nil
+        ddcThrottleStates[displayID] = state
     }
 
-    private static func humanReadableName(for raw: RawDisplayInfo) -> String {
-        let trimmed = raw.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func resetDDCThrottleState(for displayID: UInt32) {
+        ddcThrottleStates[displayID]?.scheduledToken?.cancel()
+        ddcThrottleStates.removeValue(forKey: displayID)
+    }
+
+    private func cancelAllPendingDDCWrites() {
+        for displayID in ddcThrottleStates.keys {
+            cancelPendingDDCWrite(for: displayID)
+        }
+    }
+
+    private static func persistenceKey(for raw: RawDisplayInfo) -> String {
         if raw.isBuiltIn {
-            let genericBuiltInNames: Set<String> = [
-                "",
-                "Color LCD",
-                "Built-in Retina Display",
-                "Built-in Liquid Retina Display",
-                "Built-in Liquid Retina XDR Display",
-                "Liquid Retina XDR Display",
-                "Liquid Retina Display"
-            ]
-            if genericBuiltInNames.contains(trimmed) {
-                return "Built-in Display"
-            }
-            return trimmed
+            return "builtin"
         }
-        if !trimmed.isEmpty {
-            return trimmed
+        if raw.serialNumber != 0 {
+            return String(format: "hardware:%04X:%04X:%08X", raw.vendorID, raw.modelID, raw.serialNumber)
         }
         if raw.vendorID != 0 || raw.modelID != 0 {
-            return String(format: "External Display (%04X:%04X)", raw.vendorID, raw.modelID)
+            return String(format: "display:%04X:%04X:%u", raw.vendorID, raw.modelID, raw.displayID)
         }
-        return "External Display"
+        return "display:\(raw.displayID)"
     }
 }

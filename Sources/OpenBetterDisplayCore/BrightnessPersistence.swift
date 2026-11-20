@@ -33,25 +33,3 @@ public final class UserDefaultsBrightnessStore: BrightnessPersistence, @unchecke
         keyPrefix + key
     }
 }
-
-public final class InMemoryBrightnessStore: BrightnessPersistence, @unchecked Sendable {
-    private let lock = NSLock()
-    private var values: [String: Double]
-
-    public init(initialValues: [String: Double] = [:]) {
-        self.values = initialValues.mapValues { max(0.0, min(1.0, $0)) }
-    }
-
-    public func brightness(forKey key: String) -> Double? {
-        lock.lock()
-        defer { lock.unlock() }
-        return values[key]
-    }
-
-    public func setBrightness(_ level: Double, forKey key: String) {
-        let clamped = max(0.0, min(1.0, level))
-        lock.lock()
-        defer { lock.unlock() }
-        values[key] = clamped
-    }
-}

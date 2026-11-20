@@ -134,6 +134,95 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first?.brightnessPercentage, 80)
     }
 
+    func testBuiltInDisplayReadsLiveSystemBrightnessOnLaunchWithoutOverwritingMacOSWithStalePersistedValue() {
+        let store = InMemoryBrightnessStore(initialValues: [
+            "builtin": 0.70,
+            "hardware:10AC:D0B3:12345678": 0.45
+        ])
+        let driver = FakeDisplayDriver(
+            onlineDisplays: [
+                RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
+                RawDisplayInfo(
+                    displayID: 20,
+                    name: "DELL P2217H",
+                    isBuiltIn: false,
+                    isMain: true,
+                    vendorID: 0x10AC,
+                    modelID: 0xD0B3,
+                    serialNumber: 0x12345678
+                )
+            ],
+            brightnessReadings: [
+                1: BrightnessReading(level: 0.35, backend: .nativeAppleBacklight),
+                20: BrightnessReading(level: 1.0, backend: .hardwareDDC)
+            ]
+        )
+
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: store,
+            ddcThrottleInterval: 0,
+            writeScheduler: ImmediateBrightnessWriteScheduler()
+        )
+
+        // Built-in display reads live system brightness (0.35) instead of overwriting macOS with stale 0.70
+        let builtIn = coordinator.displays.first(where: { $0.displayID == 1 })
+        XCTAssertEqual(builtIn?.brightness, 0.35)
+        XCTAssertEqual(builtIn?.brightnessPercentage, 35)
+        XCTAssertEqual(store.brightness(forKey: "builtin"), 0.35)
+        XCTAssertFalse(driver.setBrightnessHistory.contains(where: { $0.displayID == 1 }))
+
+        // External display still restores its persisted brightness (0.45) on launch
+        let external = coordinator.displays.first(where: { $0.displayID == 20 })
+        XCTAssertEqual(external?.brightness, 0.45)
+        XCTAssertEqual(external?.brightnessPercentage, 45)
+        XCTAssertEqual(driver.setBrightnessHistory.filter { $0.displayID == 20 }.map(\.level), [0.45])
+    }
+
+    func testBuiltInDisplaySyncsExternalMacOSBrightnessKeyChangesWithoutPollingExternalMonitors() {
+        let store = InMemoryBrightnessStore()
+        let driver = FakeDisplayDriver(
+            onlineDisplays: [
+                RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
+                RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: true)
+            ],
+            brightnessReadings: [
+                1: BrightnessReading(level: 0.50, backend: .nativeAppleBacklight),
+                20: BrightnessReading(level: 0.80, backend: .hardwareDDC)
+            ]
+        )
+
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: store,
+            ddcThrottleInterval: 0,
+            writeScheduler: ImmediateBrightnessWriteScheduler()
+        )
+        coordinator.setBrightness(1, level: 0.42)
+        XCTAssertEqual(store.brightness(forKey: "builtin"), 0.42)
+
+        // User presses MacBook brightness keys outside OpenBetterDisplay -> macOS moves backlight to 0.78
+        driver.brightnessReadings[1] = BrightnessReading(level: 0.78, backend: .nativeAppleBacklight)
+        driver.getBrightnessHistory.removeAll()
+        driver.setBrightnessHistory.removeAll()
+
+        coordinator.syncBuiltInBrightness()
+
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 1 })?.brightness, 0.78)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 1 })?.brightnessPercentage, 78)
+        XCTAssertEqual(store.brightness(forKey: "builtin"), 0.78)
+        // Must only query built-in display (no I2C DDC polling of external display 20) and never overwrite macOS
+        XCTAssertEqual(driver.getBrightnessHistory, [1])
+        XCTAssertTrue(driver.setBrightnessHistory.isEmpty)
+
+        // Another brightness key press followed by popover-open refreshDisplays() also updates state and store
+        driver.brightnessReadings[1] = BrightnessReading(level: 0.25, backend: .nativeAppleBacklight)
+        coordinator.refreshDisplays()
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 1 })?.brightness, 0.25)
+        XCTAssertEqual(store.brightness(forKey: "builtin"), 0.25)
+        XCTAssertTrue(driver.setBrightnessHistory.isEmpty)
+    }
+
     func testExternalDDCCapableMonitorRoutesBrightnessToHardwareDDCAndClampsBounds() {
         let driver = FakeDisplayDriver(
             onlineDisplays: [
@@ -718,6 +807,72 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440 · 133%")
     }
 
+    func testFilteredOutActiveModePreservesRealResolutionAndAllowsSwitchingToFilteredStop() {
+        let modes: [RawDisplayMode] = [
+            // Active 1x native 3840x2160 mode (filtered out because 4K display prefers HiDPI stops)
+            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
+            RawDisplayMode(modeID: 104, width: 1504, height: 846, pixelWidth: 3008, pixelHeight: 1692, refreshRate: 60.0),
+            RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
+            RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0),
+            RawDisplayMode(modeID: 103, width: 3008, height: 1692, pixelWidth: 6016, pixelHeight: 3384, refreshRate: 60.0)
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 30,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                currentModeID: 100,
+                modes: modes
+            ),
+            RawDisplayInfo(
+                displayID: 31,
+                name: "DELL U2725QE #2",
+                isBuiltIn: false,
+                isMain: false,
+                currentModeID: 100,
+                modes: modes
+            )
+        ])
+
+        let coordinator = DisplayCoordinator(driver: driver)
+        guard let firstDisplay = coordinator.displays.first(where: { $0.displayID == 30 }),
+              let secondDisplay = coordinator.displays.first(where: { $0.displayID == 31 }) else {
+            XCTFail("Expected both 4K displays")
+            return
+        }
+
+        // Must preserve real currentModeID (100) and real resolution label (3840x2160), not forge 1920x1080 (101)
+        XCTAssertEqual(firstDisplay.availableModes.map(\.modeID), [104, 101, 102, 103])
+        XCTAssertEqual(firstDisplay.currentModeID, 100)
+        XCTAssertEqual(firstDisplay.resolutionLabel, "3840x2160")
+        XCTAssertEqual(secondDisplay.currentModeID, 100)
+        XCTAssertEqual(secondDisplay.resolutionLabel, "3840x2160")
+
+        // Previewing a stop shows preview label without committing
+        coordinator.previewResolution(30, modeID: 102)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.resolutionLabel, "2560x1440 · 133%")
+        XCTAssertTrue(driver.setModeHistory.isEmpty)
+
+        // Selecting 1920x1080 (101) from dropdown MUST call driver.setDisplayMode (must NOT no-op)
+        coordinator.commitResolution(30, modeID: 101)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+        XCTAssertEqual(driver.setModeHistory.first?.displayID, 30)
+        XCTAssertEqual(driver.setModeHistory.first?.modeID, 101)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.currentModeID, 101)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.resolutionLabel, "1920x1080")
+
+        // Releasing slider at 1920x1080 (stepIndex 1) on display 31 MUST also call driver.setDisplayMode
+        coordinator.previewResolution(31, stepIndex: 1)
+        coordinator.commitResolution(31)
+        XCTAssertEqual(driver.setModeHistory.count, 2)
+        XCTAssertEqual(driver.setModeHistory.last?.displayID, 31)
+        XCTAssertEqual(driver.setModeHistory.last?.modeID, 101)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 31 })?.currentModeID, 101)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 31 })?.resolutionLabel, "1920x1080")
+    }
+
     func testReleasingSliderOnUnchangedResolutionClearsPreviewWithoutCallingDriver() {
         let modes: [RawDisplayMode] = [
             RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
@@ -1020,7 +1175,9 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(hotpluggedDell?.brightnessPercentage, 45)
         XCTAssertEqual(driver.brightnessReadings[25]?.level, 0.45)
 
-        // Simulate app restart with a fresh driver and the same persisted store
+        // Simulate app restart with a fresh driver and the same persisted store.
+        // Built-in display reports its live macOS DisplayServices backlight (0.70), while external monitors
+        // reset to 1.0 hardware default and must have their persisted brightness restored by the coordinator.
         let relaunchedDriver = FakeDisplayDriver(
             onlineDisplays: [
                 RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
@@ -1034,6 +1191,9 @@ final class DisplayCoordinatorTests: XCTestCase {
                     serialNumber: 0x12345678
                 ),
                 RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true)
+            ],
+            brightnessReadings: [
+                1: BrightnessReading(level: 0.70, backend: .nativeAppleBacklight)
             ],
             unsupportedDDCDisplayIDs: [30]
         )
@@ -1199,7 +1359,7 @@ final class DisplayCoordinatorTests: XCTestCase {
 
 @MainActor
 private final class ManualBrightnessWriteScheduler: BrightnessWriteScheduling {
-    private final class Token {
+    private final class Token: BrightnessWriteCancellable {
         let fireTime: TimeInterval
         let action: @MainActor () -> Void
         var isCancelled = false
@@ -1207,6 +1367,10 @@ private final class ManualBrightnessWriteScheduler: BrightnessWriteScheduling {
         init(fireTime: TimeInterval, action: @escaping @MainActor () -> Void) {
             self.fireTime = fireTime
             self.action = action
+        }
+
+        func cancel() {
+            isCancelled = true
         }
     }
 
@@ -1227,16 +1391,13 @@ private final class ManualBrightnessWriteScheduler: BrightnessWriteScheduling {
         currentTime
     }
 
-    func schedule(after delay: TimeInterval, action: @escaping @MainActor () -> Void) -> AnyObject {
+    func schedule(
+        after delay: TimeInterval,
+        action: @escaping @MainActor () -> Void
+    ) -> BrightnessWriteCancellable {
         let token = Token(fireTime: currentTime + max(0, delay), action: action)
         scheduledTokens.append(token)
         return token
-    }
-
-    func cancel(_ token: AnyObject) {
-        if let typed = token as? Token {
-            typed.isCancelled = true
-        }
     }
 
     func performWrite(

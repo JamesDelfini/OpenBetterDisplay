@@ -1,8 +1,8 @@
 import AppKit
 import CoreGraphics
-import Darwin
 import Foundation
 import IOKit
+import IOKit.graphics
 
 public enum DisplayDriverError: Error, LocalizedError, Equatable {
     case skyLightUnavailable
@@ -21,9 +21,89 @@ public enum DisplayDriverError: Error, LocalizedError, Equatable {
     }
 }
 
-public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
-    private static let displayModeNativeFlag: UInt32 = 0x0200_0000
+public enum SkyLightDisplayModeDescription {
+    public static let byteLength: Int32 = 212
+    public static let displayModeNativeFlag: UInt32 = 0x0200_0000
+    private static let displayModeValidAndSafeMask: UInt32 = 0x0000_0003
+    private static let displayModeUnsafeOrStretchedFlag: UInt32 = 0x4000_0000
 
+    public static func parse(bytes: [UInt8]) -> RawDisplayMode? {
+        guard bytes.count >= Int(byteLength) else { return nil }
+
+        let modeNumber = readInt32LE(bytes, offset: 0x00)
+        let flags = readUInt32LE(bytes, offset: 0x04)
+        let width = Int(readUInt32LE(bytes, offset: 0x08))
+        let height = Int(readUInt32LE(bytes, offset: 0x0C))
+        let depth = readUInt32LE(bytes, offset: 0x10)
+        let integerFreq = readUInt32LE(bytes, offset: 0x24)
+        let fixedRefreshRate = readUInt32LE(bytes, offset: 0xBC)
+        let ioFlags = readUInt32LE(bytes, offset: 0xC0)
+        let ioDisplayModeID = readInt32LE(bytes, offset: 0xC4)
+        let rawPixelsWide = Int(readUInt32LE(bytes, offset: 0xC8))
+        let rawPixelsHigh = Int(readUInt32LE(bytes, offset: 0xCC))
+        let scale = Float(bitPattern: readUInt32LE(bytes, offset: 0xD0))
+
+        guard width > 0, height > 0 else { return nil }
+
+        let modeID = (ioDisplayModeID == 0 && modeNumber != 0) ? modeNumber : ioDisplayModeID
+        let pixelWidth: Int
+        if rawPixelsWide > 0 {
+            pixelWidth = rawPixelsWide
+        } else if scale > 1.0 {
+            pixelWidth = Int((Double(width) * Double(scale)).rounded())
+        } else {
+            pixelWidth = width
+        }
+
+        let pixelHeight: Int
+        if rawPixelsHigh > 0 {
+            pixelHeight = rawPixelsHigh
+        } else if scale > 1.0 {
+            pixelHeight = Int((Double(height) * Double(scale)).rounded())
+        } else {
+            pixelHeight = height
+        }
+
+        let refreshRate: Double
+        if fixedRefreshRate > 0 {
+            refreshRate = Double(fixedRefreshRate) / 65536.0
+        } else {
+            refreshRate = Double(integerFreq)
+        }
+
+        let isNative = ((ioFlags | flags) & displayModeNativeFlag) != 0
+        let isUsableForDesktopGUI =
+            (ioFlags & displayModeValidAndSafeMask) == displayModeValidAndSafeMask
+            && (flags & displayModeUnsafeOrStretchedFlag) == 0
+            && width >= 800
+            && height >= 600
+            && depth >= 4
+
+        return RawDisplayMode(
+            modeID: modeID,
+            width: width,
+            height: height,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            refreshRate: refreshRate,
+            isUsableForDesktopGUI: isUsableForDesktopGUI,
+            isNative: isNative
+        )
+    }
+
+    private static func readUInt32LE(_ bytes: [UInt8], offset: Int) -> UInt32 {
+        UInt32(bytes[offset])
+            | (UInt32(bytes[offset + 1]) << 8)
+            | (UInt32(bytes[offset + 2]) << 16)
+            | (UInt32(bytes[offset + 3]) << 24)
+    }
+
+    private static func readInt32LE(_ bytes: [UInt8], offset: Int) -> Int32 {
+        Int32(bitPattern: readUInt32LE(bytes, offset: offset))
+    }
+}
+
+public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
     private typealias CGSGetDisplayListFn = @convention(c) (
         UInt32,
         UnsafeMutablePointer<CGDirectDisplayID>?,
@@ -40,6 +120,23 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         CGDisplayConfigRef?,
         CGDirectDisplayID,
         Int32
+    ) -> CGError
+
+    private typealias CGSGetNumberOfDisplayModesFn = @convention(c) (
+        CGDirectDisplayID,
+        UnsafeMutablePointer<Int32>
+    ) -> CGError
+
+    private typealias CGSGetDisplayModeDescriptionOfLengthFn = @convention(c) (
+        CGDirectDisplayID,
+        Int32,
+        UnsafeMutableRawPointer,
+        Int32
+    ) -> CGError
+
+    private typealias CGSGetCurrentDisplayModeFn = @convention(c) (
+        CGDirectDisplayID,
+        UnsafeMutablePointer<Int32>
     ) -> CGError
 
     private typealias CoreDisplayCreateInfoDictionaryFn = @convention(c) (
@@ -60,164 +157,63 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         Float
     ) -> Int32
 
-    private typealias IOAVServiceCreateWithServiceFn = @convention(c) (
-        CFAllocator?,
-        io_service_t
-    ) -> Unmanaged<CFTypeRef>?
-
-    private typealias IOAVServiceReadI2CFn = @convention(c) (
-        CFTypeRef,
-        UInt32,
-        UInt32,
-        UnsafeMutableRawPointer,
-        UInt32
-    ) -> IOReturn
-
-    private typealias IOAVServiceWriteI2CFn = @convention(c) (
-        CFTypeRef,
-        UInt32,
-        UInt32,
-        UnsafeRawPointer,
-        UInt32
-    ) -> IOReturn
-
-    private typealias IOAVServiceCopyEDIDFn = @convention(c) (
-        CFTypeRef,
-        UnsafeMutablePointer<Unmanaged<CFData>?>
-    ) -> IOReturn
-
-    private typealias IOAVServiceGetLocationFn = @convention(c) (
-        CFTypeRef
-    ) -> UInt32
-
-    private enum DDCCacheEntry {
-        case supported(service: CFTypeRef, registryPath: String, maxValue: Int)
-        case unsupported
-    }
-
-    private let skyLightHandle: UnsafeMutableRawPointer?
-    private let coreDisplayHandle: UnsafeMutableRawPointer?
-    private let displayServicesHandle: UnsafeMutableRawPointer?
-    private let ioKitHandle: UnsafeMutableRawPointer?
-
     private let cgsGetDisplayList: CGSGetDisplayListFn?
     private let cgsConfigureDisplayEnabled: CGSConfigureDisplayEnabledFn?
     private let cgsConfigureDisplayMode: CGSConfigureDisplayModeFn?
+    private let cgsGetNumberOfDisplayModes: CGSGetNumberOfDisplayModesFn?
+    private let cgsGetDisplayModeDescriptionOfLength: CGSGetDisplayModeDescriptionOfLengthFn?
+    private let cgsGetCurrentDisplayMode: CGSGetCurrentDisplayModeFn?
     private let coreDisplayCreateInfoDictionary: CoreDisplayCreateInfoDictionaryFn?
     private let displayServicesCanChangeBrightness: DisplayServicesCanChangeBrightnessFn?
     private let displayServicesGetBrightness: DisplayServicesGetBrightnessFn?
     private let displayServicesSetBrightness: DisplayServicesSetBrightnessFn?
-    private let ioAVServiceCreateWithService: IOAVServiceCreateWithServiceFn?
-    private let ioAVServiceReadI2C: IOAVServiceReadI2CFn?
-    private let ioAVServiceWriteI2C: IOAVServiceWriteI2CFn?
-    private let ioAVServiceCopyEDID: IOAVServiceCopyEDIDFn?
-    private let ioAVServiceGetLocation: IOAVServiceGetLocationFn?
 
-    private let ddcLock = NSLock()
-    private var ddcCache: [CGDirectDisplayID: DDCCacheEntry] = [:]
+    private let stateLock = NSLock()
     private var softwareGammaLevels: [CGDirectDisplayID: Double] = [:]
+    private let ddcClient: AppleSiliconDDCClient
 
     public init() {
-        let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
-        self.skyLightHandle = skyLight
-        if let skyLight {
-            if let sym = dlsym(skyLight, "CGSGetDisplayList") {
-                self.cgsGetDisplayList = unsafeBitCast(sym, to: CGSGetDisplayListFn.self)
-            } else {
-                self.cgsGetDisplayList = nil
-            }
-            if let sym = dlsym(skyLight, "CGSConfigureDisplayEnabled") {
-                self.cgsConfigureDisplayEnabled = unsafeBitCast(sym, to: CGSConfigureDisplayEnabledFn.self)
-            } else {
-                self.cgsConfigureDisplayEnabled = nil
-            }
-            if let sym = dlsym(skyLight, "CGSConfigureDisplayMode") {
-                self.cgsConfigureDisplayMode = unsafeBitCast(sym, to: CGSConfigureDisplayModeFn.self)
-            } else {
-                self.cgsConfigureDisplayMode = nil
-            }
-        } else {
-            self.cgsGetDisplayList = nil
-            self.cgsConfigureDisplayEnabled = nil
-            self.cgsConfigureDisplayMode = nil
-        }
+        let skyLight = DynamicLibrary(path: "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight")
+        let getDisplayList: CGSGetDisplayListFn? = skyLight.symbol("CGSGetDisplayList")
+        self.cgsGetDisplayList = getDisplayList
+        self.cgsConfigureDisplayEnabled = skyLight.symbol("CGSConfigureDisplayEnabled")
+        self.cgsConfigureDisplayMode = skyLight.symbol("CGSConfigureDisplayMode")
+        self.cgsGetNumberOfDisplayModes = skyLight.symbol("CGSGetNumberOfDisplayModes")
+        self.cgsGetDisplayModeDescriptionOfLength = skyLight.symbol("CGSGetDisplayModeDescriptionOfLength")
+        self.cgsGetCurrentDisplayMode = skyLight.symbol("CGSGetCurrentDisplayMode")
 
-        let coreDisplay = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY)
-        self.coreDisplayHandle = coreDisplay
-        if let coreDisplay, let sym = dlsym(coreDisplay, "CoreDisplay_DisplayCreateInfoDictionary") {
-            self.coreDisplayCreateInfoDictionary = unsafeBitCast(sym, to: CoreDisplayCreateInfoDictionaryFn.self)
-        } else {
-            self.coreDisplayCreateInfoDictionary = nil
-        }
+        let coreDisplay = DynamicLibrary(path: "/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay")
+        let createInfoDict: CoreDisplayCreateInfoDictionaryFn? = coreDisplay.symbol("CoreDisplay_DisplayCreateInfoDictionary")
+        self.coreDisplayCreateInfoDictionary = createInfoDict
 
-        let displayServices = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY)
-        self.displayServicesHandle = displayServices
-        if let displayServices {
-            if let sym = dlsym(displayServices, "DisplayServicesCanChangeBrightness") {
-                self.displayServicesCanChangeBrightness = unsafeBitCast(sym, to: DisplayServicesCanChangeBrightnessFn.self)
-            } else {
-                self.displayServicesCanChangeBrightness = nil
-            }
-            if let sym = dlsym(displayServices, "DisplayServicesGetBrightness") {
-                self.displayServicesGetBrightness = unsafeBitCast(sym, to: DisplayServicesGetBrightnessFn.self)
-            } else {
-                self.displayServicesGetBrightness = nil
-            }
-            if let sym = dlsym(displayServices, "DisplayServicesSetBrightness") {
-                self.displayServicesSetBrightness = unsafeBitCast(sym, to: DisplayServicesSetBrightnessFn.self)
-            } else {
-                self.displayServicesSetBrightness = nil
-            }
-        } else {
-            self.displayServicesCanChangeBrightness = nil
-            self.displayServicesGetBrightness = nil
-            self.displayServicesSetBrightness = nil
-        }
+        let displayServices = DynamicLibrary(path: "/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices")
+        self.displayServicesCanChangeBrightness = displayServices.symbol("DisplayServicesCanChangeBrightness")
+        self.displayServicesGetBrightness = displayServices.symbol("DisplayServicesGetBrightness")
+        self.displayServicesSetBrightness = displayServices.symbol("DisplayServicesSetBrightness")
 
-        let ioKit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY)
-        self.ioKitHandle = ioKit
-        if let ioKit {
-            if let sym = dlsym(ioKit, "IOAVServiceCreateWithService") {
-                self.ioAVServiceCreateWithService = unsafeBitCast(sym, to: IOAVServiceCreateWithServiceFn.self)
-            } else {
-                self.ioAVServiceCreateWithService = nil
+        let transport = IOAVServiceDDCTransport(
+            matchTargetProvider: { displayID in
+                Self.buildDisplayMatchTarget(
+                    for: displayID,
+                    coreDisplayCreateInfoDictionary: createInfoDict
+                )
+            },
+            externalDisplayCountProvider: {
+                Self.collectConnectedDisplayIDs(cgsGetDisplayList: getDisplayList)
+                    .filter { CGDisplayIsBuiltin($0) == 0 }
+                    .count
             }
-            if let sym = dlsym(ioKit, "IOAVServiceReadI2C") {
-                self.ioAVServiceReadI2C = unsafeBitCast(sym, to: IOAVServiceReadI2CFn.self)
-            } else {
-                self.ioAVServiceReadI2C = nil
-            }
-            if let sym = dlsym(ioKit, "IOAVServiceWriteI2C") {
-                self.ioAVServiceWriteI2C = unsafeBitCast(sym, to: IOAVServiceWriteI2CFn.self)
-            } else {
-                self.ioAVServiceWriteI2C = nil
-            }
-            if let sym = dlsym(ioKit, "IOAVServiceCopyEDID") {
-                self.ioAVServiceCopyEDID = unsafeBitCast(sym, to: IOAVServiceCopyEDIDFn.self)
-            } else {
-                self.ioAVServiceCopyEDID = nil
-            }
-            if let sym = dlsym(ioKit, "IOAVServiceGetLocation") {
-                self.ioAVServiceGetLocation = unsafeBitCast(sym, to: IOAVServiceGetLocationFn.self)
-            } else {
-                self.ioAVServiceGetLocation = nil
-            }
-        } else {
-            self.ioAVServiceCreateWithService = nil
-            self.ioAVServiceReadI2C = nil
-            self.ioAVServiceWriteI2C = nil
-            self.ioAVServiceCopyEDID = nil
-            self.ioAVServiceGetLocation = nil
-        }
+        )
+        self.ddcClient = AppleSiliconDDCClient(transport: transport)
     }
 
     public func fetchOnlineDisplays() -> [RawDisplayInfo] {
-        let displayIDs = collectConnectedDisplayIDs()
+        let displayIDs = Self.collectConnectedDisplayIDs(cgsGetDisplayList: cgsGetDisplayList)
         let activeIDSet = Set(displayIDs)
-        ddcLock.lock()
-        ddcCache = ddcCache.filter { activeIDSet.contains($0.key) }
+        ddcClient.pruneDisplays(keeping: activeIDSet)
+        stateLock.lock()
         softwareGammaLevels = softwareGammaLevels.filter { activeIDSet.contains($0.key) }
-        ddcLock.unlock()
+        stateLock.unlock()
 
         return displayIDs.map { displayID in
             let isBuiltIn = CGDisplayIsBuiltin(displayID) != 0
@@ -226,8 +222,14 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             let vendorID = CGDisplayVendorNumber(displayID)
             let modelID = CGDisplayModelNumber(displayID)
             let serialNumber = CGDisplaySerialNumber(displayID)
-            let name = resolveDisplayName(for: displayID, isBuiltIn: isBuiltIn, vendorID: vendorID, modelID: modelID)
-            let currentModeID = CGDisplayCopyDisplayMode(displayID)?.ioDisplayModeID ?? 0
+            let name = resolveDisplayName(
+                for: displayID,
+                isBuiltIn: isBuiltIn,
+                vendorID: vendorID,
+                modelID: modelID,
+                serialNumber: serialNumber
+            )
+            let currentModeID = fetchCurrentModeID(for: displayID)
             let modes = fetchDisplayModes(for: displayID)
 
             return RawDisplayInfo(
@@ -249,24 +251,16 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         guard let cgsConfigureDisplayEnabled else {
             throw DisplayDriverError.skyLightUnavailable
         }
-        var configRef: CGDisplayConfigRef?
-        let beginErr = CGBeginDisplayConfiguration(&configRef)
-        guard beginErr == .success, let configRef else {
-            throw DisplayDriverError.configurationFailed(beginErr.rawValue)
+        try performDisplayConfiguration { configRef in
+            let err = cgsConfigureDisplayEnabled(configRef, displayID, enabled)
+            guard err == .success else {
+                throw DisplayDriverError.configurationFailed(err.rawValue)
+            }
         }
-        let configureErr = cgsConfigureDisplayEnabled(configRef, displayID, enabled)
-        guard configureErr == .success else {
-            CGCancelDisplayConfiguration(configRef)
-            throw DisplayDriverError.configurationFailed(configureErr.rawValue)
-        }
-        let completeErr = CGCompleteDisplayConfiguration(configRef, .forSession)
-        guard completeErr == .success else {
-            throw DisplayDriverError.configurationFailed(completeErr.rawValue)
-        }
-        ddcLock.lock()
-        ddcCache.removeValue(forKey: displayID)
+        ddcClient.invalidate(displayID: displayID)
+        stateLock.lock()
         softwareGammaLevels.removeValue(forKey: displayID)
-        ddcLock.unlock()
+        stateLock.unlock()
     }
 
     public func setMainDisplay(_ displayID: UInt32) throws {
@@ -278,41 +272,31 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         let offsetX = -Int32(targetBounds.origin.x.rounded())
         let offsetY = -Int32(targetBounds.origin.y.rounded())
 
-        var activeIDs = collectConnectedDisplayIDs().filter { CGDisplayIsActive($0) != 0 }
+        var activeIDs = Self.collectConnectedDisplayIDs(cgsGetDisplayList: cgsGetDisplayList)
+            .filter { CGDisplayIsActive($0) != 0 }
         if !activeIDs.contains(displayID) {
             activeIDs.append(displayID)
         }
 
-        var configRef: CGDisplayConfigRef?
-        let beginErr = CGBeginDisplayConfiguration(&configRef)
-        guard beginErr == .success, let configRef else {
-            throw DisplayDriverError.configurationFailed(beginErr.rawValue)
-        }
-
-        let targetErr = CGConfigureDisplayOrigin(configRef, displayID, 0, 0)
-        guard targetErr == .success else {
-            CGCancelDisplayConfiguration(configRef)
-            throw DisplayDriverError.configurationFailed(targetErr.rawValue)
-        }
-
-        for id in activeIDs where id != displayID {
-            // Skip displays that mirror another display; their origin follows their primary.
-            if CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay {
-                continue
+        try performDisplayConfiguration { configRef in
+            let targetErr = CGConfigureDisplayOrigin(configRef, displayID, 0, 0)
+            guard targetErr == .success else {
+                throw DisplayDriverError.configurationFailed(targetErr.rawValue)
             }
-            let bounds = CGDisplayBounds(id)
-            let newX = Int32(bounds.origin.x.rounded()) + offsetX
-            let newY = Int32(bounds.origin.y.rounded()) + offsetY
-            let originErr = CGConfigureDisplayOrigin(configRef, id, newX, newY)
-            guard originErr == .success else {
-                CGCancelDisplayConfiguration(configRef)
-                throw DisplayDriverError.configurationFailed(originErr.rawValue)
-            }
-        }
 
-        let completeErr = CGCompleteDisplayConfiguration(configRef, .forSession)
-        guard completeErr == .success else {
-            throw DisplayDriverError.configurationFailed(completeErr.rawValue)
+            for id in activeIDs where id != displayID {
+                // Skip displays that mirror another display; their origin follows their primary.
+                if CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay {
+                    continue
+                }
+                let bounds = CGDisplayBounds(id)
+                let newX = Int32(bounds.origin.x.rounded()) + offsetX
+                let newY = Int32(bounds.origin.y.rounded()) + offsetY
+                let originErr = CGConfigureDisplayOrigin(configRef, id, newX, newY)
+                guard originErr == .success else {
+                    throw DisplayDriverError.configurationFailed(originErr.rawValue)
+                }
+            }
         }
     }
 
@@ -322,20 +306,19 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         }
 
         if CGDisplayIsBuiltin(displayID) != 0 {
-            ddcLock.lock()
+            stateLock.lock()
             let level = softwareGammaLevels[displayID] ?? 1.0
-            ddcLock.unlock()
+            stateLock.unlock()
             return BrightnessReading(level: level, backend: .nativeAppleBacklight)
         }
 
-        ddcLock.lock()
-        defer { ddcLock.unlock() }
-
-        if let reply = readDDCBrightnessWithCacheLocked(for: displayID) {
+        if let reply = ddcClient.readBrightness(for: displayID) {
             return BrightnessReading(level: reply.normalizedLevel, backend: .hardwareDDC)
         }
 
+        stateLock.lock()
         let fallbackLevel = softwareGammaLevels[displayID] ?? 1.0
+        stateLock.unlock()
         return BrightnessReading(level: fallbackLevel, backend: .softwareGamma)
     }
 
@@ -343,22 +326,17 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         let clamped = max(0.0, min(1.0, level))
 
         if writeNativeAppleBacklight(displayID, level: clamped) {
-            ddcLock.lock()
-            clearSoftwareGammaIfAppliedLocked(displayID: displayID)
-            ddcLock.unlock()
+            clearSoftwareGammaIfApplied(displayID: displayID)
             return .nativeAppleBacklight
         }
 
-        ddcLock.lock()
-        defer { ddcLock.unlock() }
-
         if CGDisplayIsBuiltin(displayID) == 0,
-           writeDDCBrightnessWithCacheLocked(for: displayID, level: clamped) {
-            clearSoftwareGammaIfAppliedLocked(displayID: displayID)
+           ddcClient.writeBrightness(for: displayID, level: clamped) {
+            clearSoftwareGammaIfApplied(displayID: displayID)
             return .hardwareDDC
         }
 
-        applySoftwareGammaLocked(displayID: displayID, level: clamped)
+        applySoftwareGamma(displayID: displayID, level: clamped)
         return .softwareGamma
     }
 
@@ -371,44 +349,57 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             throw DisplayDriverError.modeNotFound(modeID)
         }
 
+        try performDisplayConfiguration { configRef in
+            var configErr: CGError = .failure
+            if let targetMode {
+                configErr = CGConfigureDisplayWithDisplayMode(configRef, displayID, targetMode, nil)
+            }
+            if configErr != .success, let cgsConfigureDisplayMode {
+                configErr = cgsConfigureDisplayMode(configRef, displayID, modeID)
+            }
+            guard configErr == .success else {
+                if targetMode == nil {
+                    throw DisplayDriverError.modeNotFound(modeID)
+                }
+                throw DisplayDriverError.configurationFailed(configErr.rawValue)
+            }
+        }
+    }
+
+    public func resetSoftwareGamma() {
+        stateLock.lock()
+        softwareGammaLevels.removeAll()
+        stateLock.unlock()
+        CGDisplayRestoreColorSyncSettings()
+    }
+
+    // MARK: - CoreGraphics Configuration Transaction
+
+    private func performDisplayConfiguration(
+        _ configure: (CGDisplayConfigRef) throws -> Void
+    ) throws {
         var configRef: CGDisplayConfigRef?
         let beginErr = CGBeginDisplayConfiguration(&configRef)
         guard beginErr == .success, let configRef else {
             throw DisplayDriverError.configurationFailed(beginErr.rawValue)
         }
-
-        var configErr: CGError = .failure
-        if let targetMode {
-            configErr = CGConfigureDisplayWithDisplayMode(configRef, displayID, targetMode, nil)
-        }
-        if configErr != .success, let cgsConfigureDisplayMode {
-            configErr = cgsConfigureDisplayMode(configRef, displayID, modeID)
-        }
-
-        guard configErr == .success else {
+        do {
+            try configure(configRef)
+        } catch {
             CGCancelDisplayConfiguration(configRef)
-            if targetMode == nil {
-                throw DisplayDriverError.modeNotFound(modeID)
-            }
-            throw DisplayDriverError.configurationFailed(configErr.rawValue)
+            throw error
         }
-
         let completeErr = CGCompleteDisplayConfiguration(configRef, .forSession)
         guard completeErr == .success else {
             throw DisplayDriverError.configurationFailed(completeErr.rawValue)
         }
     }
 
-    public func resetSoftwareGamma() {
-        ddcLock.lock()
-        softwareGammaLevels.removeAll()
-        ddcLock.unlock()
-        CGDisplayRestoreColorSyncSettings()
-    }
+    // MARK: - Discovery, Naming & Mode Queries
 
-    // MARK: - Private Helpers
-
-    private func collectConnectedDisplayIDs() -> [CGDirectDisplayID] {
+    private static func collectConnectedDisplayIDs(
+        cgsGetDisplayList: CGSGetDisplayListFn?
+    ) -> [CGDirectDisplayID] {
         let maxDisplays: UInt32 = 32
         var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(maxDisplays))
         var onlineCount: UInt32 = 0
@@ -445,24 +436,18 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         for displayID: CGDirectDisplayID,
         isBuiltIn: Bool,
         vendorID: UInt32,
-        modelID: UInt32
+        modelID: UInt32,
+        serialNumber: UInt32
     ) -> String {
         if isBuiltIn {
             return "Built-in Display"
         }
 
         if let coreDisplayCreateInfoDictionary,
-           let unmanagedDict = coreDisplayCreateInfoDictionary(displayID) {
-            let cfDict = unmanagedDict.takeRetainedValue()
-            if let dict = cfDict as? [String: Any],
-               let productNames = dict["DisplayProductName"] as? [String: String] {
-                if let enUS = productNames["en_US"], !enUS.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    return enUS.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-                if let firstName = productNames.values.first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
-                    return firstName.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            }
+           let unmanagedDict = coreDisplayCreateInfoDictionary(displayID),
+           let dict = unmanagedDict.takeRetainedValue() as? [String: Any],
+           let productName = DisplayNameFormatter.extractProductName(from: dict) {
+            return productName
         }
 
         let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
@@ -476,10 +461,100 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             }
         }
 
-        if vendorID != 0 || modelID != 0 {
-            return String(format: "External Display (%04X:%04X)", vendorID, modelID)
+        if let ioKitEDIDName = readIOKitDisplayConnectName(
+            vendorID: vendorID,
+            modelID: modelID,
+            serialNumber: serialNumber
+        ) {
+            return ioKitEDIDName
         }
-        return "External Display"
+
+        if let avServiceEDIDName = ddcClient.readEDIDProductName(for: displayID) {
+            return avServiceEDIDName
+        }
+
+        return DisplayNameFormatter.fallbackExternalName(vendorID: vendorID, modelID: modelID)
+    }
+
+    private func readIOKitDisplayConnectName(
+        vendorID: UInt32,
+        modelID: UInt32,
+        serialNumber: UInt32
+    ) -> String? {
+        var iterator: io_iterator_t = 0
+        let matchResult = IOServiceGetMatchingServices(
+            kIOMainPortDefault,
+            IOServiceMatching("IODisplayConnect"),
+            &iterator
+        )
+        guard matchResult == kIOReturnSuccess, iterator != 0 else {
+            return nil
+        }
+        defer { IOObjectRelease(iterator) }
+
+        while true {
+            let service = IOIteratorNext(iterator)
+            guard service != 0 else { break }
+            defer { IOObjectRelease(service) }
+
+            guard let info = IODisplayCreateInfoDictionary(
+                service,
+                IOOptionBits(kIODisplayOnlyPreferredName)
+            )?.takeRetainedValue() as? [String: Any] else {
+                continue
+            }
+
+            let entryVendor = (info[kDisplayVendorID] as? NSNumber)?.uint32Value ?? 0
+            let entryProduct = (info[kDisplayProductID] as? NSNumber)?.uint32Value ?? 0
+            let entrySerial = (info[kDisplaySerialNumber] as? NSNumber)?.uint32Value ?? 0
+
+            if vendorID != 0, entryVendor != vendorID { continue }
+            if modelID != 0, entryProduct != modelID { continue }
+            if serialNumber != 0, entrySerial != 0, entrySerial != serialNumber { continue }
+
+            if let preferredName = DisplayNameFormatter.extractProductName(from: info) {
+                return preferredName
+            }
+            if let edidData = info[kIODisplayEDIDKey] as? Data,
+               let parsedName = DDCProtocol.parseEDID(edidData)?.productName?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !parsedName.isEmpty {
+                return parsedName
+            }
+        }
+
+        return nil
+    }
+
+    private func fetchCurrentModeID(for displayID: CGDirectDisplayID) -> Int32 {
+        if let cgCurrentMode = CGDisplayCopyDisplayMode(displayID) {
+            return cgCurrentMode.ioDisplayModeID
+        }
+        return querySkyLightCurrentModeID(for: displayID) ?? 0
+    }
+
+    private func querySkyLightCurrentModeID(for displayID: CGDirectDisplayID) -> Int32? {
+        guard let cgsGetCurrentDisplayMode else { return nil }
+        var currentModeNumber: Int32 = -1
+        guard cgsGetCurrentDisplayMode(displayID, &currentModeNumber) == .success,
+              currentModeNumber >= 0 else {
+            return nil
+        }
+        if let cgsGetDisplayModeDescriptionOfLength {
+            var buffer = [UInt8](repeating: 0, count: Int(SkyLightDisplayModeDescription.byteLength))
+            let err = buffer.withUnsafeMutableBytes { rawBuffer -> CGError in
+                guard let baseAddress = rawBuffer.baseAddress else { return .failure }
+                return cgsGetDisplayModeDescriptionOfLength(
+                    displayID,
+                    currentModeNumber,
+                    baseAddress,
+                    SkyLightDisplayModeDescription.byteLength
+                )
+            }
+            if err == .success, let parsed = SkyLightDisplayModeDescription.parse(bytes: buffer) {
+                return parsed.modeID
+            }
+        }
+        return currentModeNumber
     }
 
     private func fetchDisplayModes(for displayID: CGDirectDisplayID) -> [RawDisplayMode] {
@@ -489,8 +564,12 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
            !cgModes.contains(where: { $0.ioDisplayModeID == currentMode.ioDisplayModeID }) {
             cgModes.append(currentMode)
         }
-        return cgModes.map { mode in
-            RawDisplayMode(
+
+        var mergedByID: [Int32: RawDisplayMode] = [:]
+        var orderedIDs: [Int32] = []
+
+        for mode in cgModes {
+            let rawMode = RawDisplayMode(
                 modeID: mode.ioDisplayModeID,
                 width: mode.width,
                 height: mode.height,
@@ -498,201 +577,68 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 pixelHeight: mode.pixelHeight,
                 refreshRate: mode.refreshRate,
                 isUsableForDesktopGUI: mode.isUsableForDesktopGUI(),
-                isNative: (mode.ioFlags & Self.displayModeNativeFlag) != 0
+                isNative: (mode.ioFlags & SkyLightDisplayModeDescription.displayModeNativeFlag) != 0
             )
+            if mergedByID[rawMode.modeID] == nil {
+                orderedIDs.append(rawMode.modeID)
+            }
+            mergedByID[rawMode.modeID] = rawMode
         }
-    }
 
-    // MARK: - Tier 1 (DisplayServices), Tier 2 (Apple Silicon DDC/CI), Tier 3 (Software Gamma)
-
-    private func supportsNativeAppleBacklight(_ displayID: CGDirectDisplayID) -> Bool {
-        if let displayServicesCanChangeBrightness {
-            return displayServicesCanChangeBrightness(displayID)
-        }
-        return CGDisplayIsBuiltin(displayID) != 0
-    }
-
-    private func readNativeAppleBacklight(_ displayID: CGDirectDisplayID) -> Double? {
-        guard supportsNativeAppleBacklight(displayID),
-              let displayServicesGetBrightness else {
-            return nil
-        }
-        var value: Float = 1.0
-        guard displayServicesGetBrightness(displayID, &value) == 0 else {
-            return nil
-        }
-        return Double(max(0.0, min(1.0, value)))
-    }
-
-    private func writeNativeAppleBacklight(_ displayID: CGDirectDisplayID, level: Double) -> Bool {
-        guard supportsNativeAppleBacklight(displayID),
-              let displayServicesSetBrightness else {
-            return false
-        }
-        return displayServicesSetBrightness(displayID, Float(level)) == 0
-    }
-
-    private func readDDCBrightnessWithCacheLocked(for displayID: CGDirectDisplayID) -> DDCProtocol.LuminanceReply? {
-        if let cached = ddcCache[displayID] {
-            switch cached {
-            case .unsupported:
-                return nil
-            case .supported(let service, let path, _):
-                if let reply = readDDCLuminanceLocked(avService: service) {
-                    ddcCache[displayID] = .supported(
-                        service: service,
-                        registryPath: path,
-                        maxValue: reply.maxValue
-                    )
-                    return reply
+        for skyLightMode in fetchSkyLightDisplayModes(for: displayID) {
+            if var existing = mergedByID[skyLightMode.modeID] {
+                if skyLightMode.isNative && !existing.isNative {
+                    existing.isNative = true
+                    mergedByID[skyLightMode.modeID] = existing
                 }
-                ddcCache.removeValue(forKey: displayID)
+            } else {
+                orderedIDs.append(skyLightMode.modeID)
+                mergedByID[skyLightMode.modeID] = skyLightMode
             }
         }
 
-        if let resolved = resolveDDCServiceLocked(for: displayID),
-           let reply = readDDCLuminanceLocked(avService: resolved.service) {
-            ddcCache[displayID] = .supported(
-                service: resolved.service,
-                registryPath: resolved.registryPath,
-                maxValue: reply.maxValue
-            )
-            return reply
-        }
-
-        ddcCache[displayID] = .unsupported
-        return nil
+        return orderedIDs.compactMap { mergedByID[$0] }
     }
 
-    private func writeDDCBrightnessWithCacheLocked(for displayID: CGDirectDisplayID, level: Double) -> Bool {
-        if let cached = ddcCache[displayID] {
-            switch cached {
-            case .unsupported:
-                return false
-            case .supported(let service, _, let maxValue):
-                if writeDDCLuminanceLocked(avService: service, level: level, maxValue: maxValue) {
-                    return true
-                }
-                ddcCache.removeValue(forKey: displayID)
-            }
+    private func fetchSkyLightDisplayModes(for displayID: CGDirectDisplayID) -> [RawDisplayMode] {
+        guard let cgsGetNumberOfDisplayModes,
+              let cgsGetDisplayModeDescriptionOfLength else {
+            return []
         }
 
-        if let resolved = resolveDDCServiceLocked(for: displayID),
-           let reply = readDDCLuminanceLocked(avService: resolved.service) {
-            let maxValue = reply.maxValue
-            if writeDDCLuminanceLocked(avService: resolved.service, level: level, maxValue: maxValue) {
-                ddcCache[displayID] = .supported(
-                    service: resolved.service,
-                    registryPath: resolved.registryPath,
-                    maxValue: maxValue
+        var modeCount: Int32 = 0
+        guard cgsGetNumberOfDisplayModes(displayID, &modeCount) == .success,
+              modeCount > 0 else {
+            return []
+        }
+
+        let boundedCount = min(modeCount, 4096)
+        var buffer = [UInt8](repeating: 0, count: Int(SkyLightDisplayModeDescription.byteLength))
+        var modes: [RawDisplayMode] = []
+        modes.reserveCapacity(Int(boundedCount))
+
+        for index in 0..<boundedCount {
+            let err = buffer.withUnsafeMutableBytes { rawBuffer -> CGError in
+                guard let baseAddress = rawBuffer.baseAddress else { return .failure }
+                return cgsGetDisplayModeDescriptionOfLength(
+                    displayID,
+                    index,
+                    baseAddress,
+                    SkyLightDisplayModeDescription.byteLength
                 )
-                return true
+            }
+            if err == .success, let parsed = SkyLightDisplayModeDescription.parse(bytes: buffer) {
+                modes.append(parsed)
             }
         }
 
-        ddcCache[displayID] = .unsupported
-        return false
+        return modes
     }
 
-    private func resolveDDCServiceLocked(
-        for displayID: CGDirectDisplayID
-    ) -> (service: CFTypeRef, registryPath: String)? {
-        guard CGDisplayIsBuiltin(displayID) == 0,
-              let ioAVServiceCreateWithService else {
-            return nil
-        }
-
-        let target = buildDisplayMatchTarget(for: displayID)
-
-        var iterator: io_iterator_t = 0
-        let matchResult = IOServiceGetMatchingServices(
-            kIOMainPortDefault,
-            IOServiceMatching("DCPAVServiceProxy"),
-            &iterator
-        )
-        guard matchResult == kIOReturnSuccess, iterator != 0 else {
-            return nil
-        }
-        defer { IOObjectRelease(iterator) }
-
-        var candidates: [(service: CFTypeRef, candidate: DDCProtocol.DDCServiceCandidate)] = []
-        while true {
-            let service = IOIteratorNext(iterator)
-            guard service != 0 else { break }
-            defer { IOObjectRelease(service) }
-
-            if let location = readStringProperty("Location", from: service),
-               location == "Embedded" {
-                continue
-            }
-
-            guard let unmanagedAVService = ioAVServiceCreateWithService(kCFAllocatorDefault, service) else {
-                continue
-            }
-            let avService = unmanagedAVService.takeRetainedValue()
-
-            if let ioAVServiceGetLocation, ioAVServiceGetLocation(avService) == 1 {
-                continue
-            }
-
-            let registryPath = readRegistryPath(for: service)
-            var parsedEDID: DDCProtocol.ParsedEDID?
-            if let ioAVServiceCopyEDID {
-                var unmanagedEDID: Unmanaged<CFData>?
-                if ioAVServiceCopyEDID(avService, &unmanagedEDID) == kIOReturnSuccess,
-                   let edidData = unmanagedEDID?.takeRetainedValue() as Data? {
-                    parsedEDID = DDCProtocol.parseEDID(edidData)
-                }
-            }
-
-            let candidate = DDCProtocol.DDCServiceCandidate(
-                registryPath: registryPath,
-                edid: parsedEDID
-            )
-            candidates.append((service: avService, candidate: candidate))
-        }
-
-        guard !candidates.isEmpty else { return nil }
-
-        let claimedPaths: Set<String> = Set(ddcCache.compactMap { entryDisplayID, entry in
-            guard entryDisplayID != displayID else { return nil }
-            if case .supported(_, let path, _) = entry {
-                return path
-            }
-            return nil
-        })
-
-        let scored = candidates.compactMap { item -> (service: CFTypeRef, path: String, score: Int, isClaimed: Bool)? in
-            guard let score = DDCProtocol.matchScore(target: target, candidate: item.candidate) else {
-                return nil
-            }
-            return (
-                service: item.service,
-                path: item.candidate.registryPath,
-                score: score,
-                isClaimed: claimedPaths.contains(item.candidate.registryPath)
-            )
-        }
-
-        if let best = scored.max(by: { lhs, rhs in
-            if lhs.isClaimed != rhs.isClaimed {
-                return lhs.isClaimed && !rhs.isClaimed
-            }
-            return lhs.score < rhs.score
-        }) {
-            return (service: best.service, registryPath: best.path)
-        }
-
-        let externalDisplayCount = collectConnectedDisplayIDs().filter { CGDisplayIsBuiltin($0) == 0 }.count
-        let unclaimedCandidates = candidates.filter { !claimedPaths.contains($0.candidate.registryPath) }
-        if externalDisplayCount == 1, unclaimedCandidates.count == 1, let only = unclaimedCandidates.first {
-            return (service: only.service, registryPath: only.candidate.registryPath)
-        }
-
-        return nil
-    }
-
-    private func buildDisplayMatchTarget(for displayID: CGDirectDisplayID) -> DDCProtocol.DisplayMatchTarget {
+    private static func buildDisplayMatchTarget(
+        for displayID: CGDirectDisplayID,
+        coreDisplayCreateInfoDictionary: CoreDisplayCreateInfoDictionaryFn?
+    ) -> DDCProtocol.DisplayMatchTarget {
         let vendorID = CGDisplayVendorNumber(displayID)
         let modelID = CGDisplayModelNumber(displayID)
         let serialNumber = CGDisplaySerialNumber(displayID)
@@ -704,23 +650,12 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         var alphanumericSerial: String?
 
         if let coreDisplayCreateInfoDictionary,
-           let unmanagedDict = coreDisplayCreateInfoDictionary(displayID) {
-            let cfDict = unmanagedDict.takeRetainedValue()
-            if let dict = cfDict as? [String: Any] {
-                if let productNames = dict["DisplayProductName"] as? [String: String] {
-                    if let enUS = productNames["en_US"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-                       !enUS.isEmpty {
-                        productName = enUS
-                    } else if let first = productNames.values.first(where: {
-                        !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    }) {
-                        productName = first.trimmingCharacters(in: .whitespacesAndNewlines)
-                    }
-                }
-                weekOfManufacture = (dict["DisplayWeekManufacture"] as? NSNumber)?.intValue
-                yearOfManufacture = (dict["DisplayYearManufacture"] as? NSNumber)?.intValue
-                ioDisplayLocation = dict["IODisplayLocation"] as? String
-            }
+           let unmanagedDict = coreDisplayCreateInfoDictionary(displayID),
+           let dict = unmanagedDict.takeRetainedValue() as? [String: Any] {
+            productName = DisplayNameFormatter.extractProductName(from: dict)
+            weekOfManufacture = (dict["DisplayWeekManufacture"] as? NSNumber)?.intValue
+            yearOfManufacture = (dict["DisplayYearManufacture"] as? NSNumber)?.intValue
+            ioDisplayLocation = dict["IODisplayLocation"] as? String
         }
 
         if let ioDisplayLocation {
@@ -752,167 +687,50 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         )
     }
 
-    private func readStringProperty(_ key: String, from entry: io_registry_entry_t) -> String? {
-        IORegistryEntryCreateCFProperty(
-            entry,
-            key as CFString,
-            kCFAllocatorDefault,
-            0
-        )?.takeRetainedValue() as? String
-    }
+    // MARK: - Tier 1 (DisplayServices) & Tier 3 (Software Gamma)
 
-    private func readRegistryPath(for entry: io_registry_entry_t) -> String {
-        var pathBuffer = [CChar](repeating: 0, count: 512)
-        let status = IORegistryEntryGetPath(entry, kIOServicePlane, &pathBuffer)
-        guard status == kIOReturnSuccess else { return "" }
-        return String(cString: pathBuffer)
-    }
-
-    private func readDDCLuminanceLocked(avService: CFTypeRef) -> DDCProtocol.LuminanceReply? {
-        guard let ioAVServiceWriteI2C, let ioAVServiceReadI2C else { return nil }
-
-        var request = DDCProtocol.makeGetLuminancePacket()
-        var reply = [UInt8](repeating: 0, count: 11)
-
-        for attempt in 0..<3 {
-            var writeSucceeded = false
-            for cycle in 0..<2 {
-                let status = ioAVServiceWriteI2C(
-                    avService,
-                    DDCProtocol.chipAddress,
-                    DDCProtocol.writeDataAddress,
-                    &request,
-                    UInt32(request.count)
-                )
-                if status == kIOReturnSuccess {
-                    writeSucceeded = true
-                }
-                if cycle == 0 {
-                    usleep(10_000)
-                }
-            }
-
-            if !writeSucceeded {
-                if attempt < 2 {
-                    usleep(20_000)
-                }
-                continue
-            }
-
-            usleep(45_000)
-            for idx in reply.indices {
-                reply[idx] = 0
-            }
-
-            let readStatus = ioAVServiceReadI2C(
-                avService,
-                DDCProtocol.chipAddress,
-                DDCProtocol.readDataAddress,
-                &reply,
-                UInt32(reply.count)
-            )
-            if readStatus == kIOReturnSuccess,
-               let parsed = DDCProtocol.parseLuminanceReply(reply) {
-                return parsed
-            }
-
-            if attempt < 2 {
-                usleep(20_000)
-            }
+    private func supportsNativeAppleBacklight(_ displayID: CGDirectDisplayID) -> Bool {
+        if let displayServicesCanChangeBrightness {
+            return displayServicesCanChangeBrightness(displayID)
         }
-
-        return nil
+        return CGDisplayIsBuiltin(displayID) != 0
     }
 
-    private func writeDDCLuminanceLocked(
-        avService: CFTypeRef,
-        level: Double,
-        maxValue: Int
-    ) -> Bool {
-        guard let ioAVServiceWriteI2C else { return false }
-
-        var packet = DDCProtocol.makeSetLuminancePacket(level: level, maxValue: maxValue)
-        var writeSucceeded = false
-        for cycle in 0..<2 {
-            let status = ioAVServiceWriteI2C(
-                avService,
-                DDCProtocol.chipAddress,
-                DDCProtocol.writeDataAddress,
-                &packet,
-                UInt32(packet.count)
-            )
-            if status == kIOReturnSuccess {
-                writeSucceeded = true
-            }
-            if cycle == 0 {
-                usleep(10_000)
-            }
+    private func readNativeAppleBacklight(_ displayID: CGDirectDisplayID) -> Double? {
+        guard supportsNativeAppleBacklight(displayID),
+              let displayServicesGetBrightness else {
+            return nil
         }
-        return writeSucceeded
+        var value: Float = 1.0
+        guard displayServicesGetBrightness(displayID, &value) == 0 else {
+            return nil
+        }
+        return Double(max(0.0, min(1.0, value)))
     }
 
-    private func applySoftwareGammaLocked(displayID: CGDirectDisplayID, level: Double) {
+    private func writeNativeAppleBacklight(_ displayID: CGDirectDisplayID, level: Double) -> Bool {
+        guard supportsNativeAppleBacklight(displayID),
+              let displayServicesSetBrightness else {
+            return false
+        }
+        return displayServicesSetBrightness(displayID, Float(level)) == 0
+    }
+
+    private func applySoftwareGamma(displayID: CGDirectDisplayID, level: Double) {
+        stateLock.lock()
         var table = DDCProtocol.makeSoftwareGammaTable(level: level)
         _ = CGSetDisplayTransferByTable(displayID, UInt32(table.count), &table, &table, &table)
         softwareGammaLevels[displayID] = level
+        stateLock.unlock()
     }
 
-    private func clearSoftwareGammaIfAppliedLocked(displayID: CGDirectDisplayID) {
-        guard softwareGammaLevels.removeValue(forKey: displayID) != nil else { return }
-        var identity = DDCProtocol.makeSoftwareGammaTable(level: 1.0)
-        _ = CGSetDisplayTransferByTable(displayID, UInt32(identity.count), &identity, &identity, &identity)
-    }
-}
-
-@MainActor
-public final class DisplayReconfigurationObserver {
-    private let onReconfigure: @MainActor () -> Void
-    private nonisolated(unsafe) var notificationObserver: NSObjectProtocol?
-    private nonisolated(unsafe) var isRegisteredCallback = false
-
-    public init(onReconfigure: @escaping @MainActor () -> Void) {
-        self.onReconfigure = onReconfigure
-        start()
-    }
-
-    deinit {
-        stop()
-    }
-
-    public func start() {
-        guard !isRegisteredCallback else { return }
-        let pointer = Unmanaged.passUnretained(self).toOpaque()
-        CGDisplayRegisterReconfigurationCallback(Self.reconfigurationCallback, pointer)
-        isRegisteredCallback = true
-
-        notificationObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didChangeScreenParametersNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.onReconfigure()
-            }
+    private func clearSoftwareGammaIfApplied(displayID: CGDirectDisplayID) {
+        stateLock.lock()
+        let hadGamma = softwareGammaLevels.removeValue(forKey: displayID) != nil
+        if hadGamma {
+            var identity = DDCProtocol.makeSoftwareGammaTable(level: 1.0)
+            _ = CGSetDisplayTransferByTable(displayID, UInt32(identity.count), &identity, &identity, &identity)
         }
-    }
-
-    nonisolated public func stop() {
-        if isRegisteredCallback {
-            let pointer = Unmanaged.passUnretained(self).toOpaque()
-            CGDisplayRemoveReconfigurationCallback(Self.reconfigurationCallback, pointer)
-            isRegisteredCallback = false
-        }
-        if let notificationObserver {
-            NotificationCenter.default.removeObserver(notificationObserver)
-            self.notificationObserver = nil
-        }
-    }
-
-    nonisolated private static let reconfigurationCallback: CGDisplayReconfigurationCallBack = { _, flags, userInfo in
-        guard !flags.contains(.beginConfigurationFlag), let userInfo else { return }
-        let observer = Unmanaged<DisplayReconfigurationObserver>.fromOpaque(userInfo).takeUnretainedValue()
-        Task { @MainActor in
-            observer.onReconfigure()
-        }
+        stateLock.unlock()
     }
 }

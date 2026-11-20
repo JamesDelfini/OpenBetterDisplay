@@ -141,14 +141,18 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
     public var isMain: Bool
     public var isEnabled: Bool
     public var canToggleOff: Bool
-    public var symbolName: String
     public var brightness: Double
     public var brightnessBackend: BrightnessBackendUsed
     public var availableModes: [DisplayModeOption]
     public var currentModeID: Int32
+    public var currentModeOption: DisplayModeOption?
     public var previewModeID: Int32?
 
     public var id: UInt32 { displayID }
+
+    public var symbolName: String {
+        isBuiltIn ? "laptopcomputer" : "display"
+    }
 
     public var canSetAsMain: Bool {
         isEnabled && !isMain
@@ -166,14 +170,32 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         if let current = availableModes.first(where: { $0.modeID == currentModeID }) {
             return current
         }
+        if let currentModeOption {
+            return currentModeOption
+        }
         return availableModes.first(where: { $0.scalePercentage == 100 }) ?? availableModes.last
     }
 
     public var activeOrPreviewModeIndex: Int? {
-        guard let targetID = activeOrPreviewMode?.modeID else {
+        guard !availableModes.isEmpty else {
             return nil
         }
-        return availableModes.firstIndex(where: { $0.modeID == targetID })
+        if let previewModeID,
+           let previewIndex = availableModes.firstIndex(where: { $0.modeID == previewModeID }) {
+            return previewIndex
+        }
+        if let currentIndex = availableModes.firstIndex(where: { $0.modeID == currentModeID }) {
+            return currentIndex
+        }
+        if let currentModeOption {
+            let targetArea = currentModeOption.width * currentModeOption.height
+            return availableModes.indices.min { lhs, rhs in
+                let lhsDiff = abs(availableModes[lhs].width * availableModes[lhs].height - targetArea)
+                let rhsDiff = abs(availableModes[rhs].width * availableModes[rhs].height - targetArea)
+                return lhsDiff < rhsDiff
+            }
+        }
+        return availableModes.firstIndex(where: { $0.scalePercentage == 100 }) ?? availableModes.indices.last
     }
 
     public var resolutionLabel: String {
@@ -187,11 +209,11 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         isMain: Bool = false,
         isEnabled: Bool = true,
         canToggleOff: Bool = false,
-        symbolName: String = "",
         brightness: Double = 1.0,
         brightnessBackend: BrightnessBackendUsed = .hardwareDDC,
         availableModes: [DisplayModeOption] = [],
         currentModeID: Int32 = 0,
+        currentModeOption: DisplayModeOption? = nil,
         previewModeID: Int32? = nil
     ) {
         self.displayID = displayID
@@ -200,11 +222,11 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         self.isMain = isMain
         self.isEnabled = isEnabled
         self.canToggleOff = canToggleOff
-        self.symbolName = symbolName
         self.brightness = brightness
         self.brightnessBackend = brightnessBackend
         self.availableModes = availableModes
         self.currentModeID = currentModeID
+        self.currentModeOption = currentModeOption
         self.previewModeID = previewModeID
     }
 }

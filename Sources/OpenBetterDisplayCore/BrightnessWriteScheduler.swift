@@ -1,10 +1,17 @@
 import Foundation
 
 @MainActor
+public protocol BrightnessWriteCancellable: AnyObject {
+    func cancel()
+}
+
+@MainActor
 public protocol BrightnessWriteScheduling: AnyObject {
     func now() -> TimeInterval
-    func schedule(after delay: TimeInterval, action: @escaping @MainActor () -> Void) -> AnyObject
-    func cancel(_ token: AnyObject)
+    func schedule(
+        after delay: TimeInterval,
+        action: @escaping @MainActor () -> Void
+    ) -> BrightnessWriteCancellable
     func performWrite(
         _ work: @escaping @Sendable () -> BrightnessBackendUsed,
         completion: @escaping @MainActor (BrightnessBackendUsed) -> Void
@@ -13,6 +20,18 @@ public protocol BrightnessWriteScheduling: AnyObject {
 
 @MainActor
 public final class MainQueueBrightnessWriteScheduler: BrightnessWriteScheduling {
+    private final class DispatchWorkItemToken: BrightnessWriteCancellable {
+        private let workItem: DispatchWorkItem
+
+        init(workItem: DispatchWorkItem) {
+            self.workItem = workItem
+        }
+
+        func cancel() {
+            workItem.cancel()
+        }
+    }
+
     private let ddcQueue = DispatchQueue(
         label: "com.openbetterdisplay.ddc-brightness-write",
         qos: .userInitiated
@@ -24,18 +43,17 @@ public final class MainQueueBrightnessWriteScheduler: BrightnessWriteScheduling 
         ProcessInfo.processInfo.systemUptime
     }
 
-    public func schedule(after delay: TimeInterval, action: @escaping @MainActor () -> Void) -> AnyObject {
+    public func schedule(
+        after delay: TimeInterval,
+        action: @escaping @MainActor () -> Void
+    ) -> BrightnessWriteCancellable {
         let item = DispatchWorkItem {
             MainActor.assumeIsolated {
                 action()
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay), execute: item)
-        return item
-    }
-
-    public func cancel(_ token: AnyObject) {
-        (token as? DispatchWorkItem)?.cancel()
+        return DispatchWorkItemToken(workItem: item)
     }
 
     public func performWrite(
@@ -50,28 +68,5 @@ public final class MainQueueBrightnessWriteScheduler: BrightnessWriteScheduling 
                 }
             }
         }
-    }
-}
-
-@MainActor
-public final class ImmediateBrightnessWriteScheduler: BrightnessWriteScheduling {
-    public init() {}
-
-    public func now() -> TimeInterval {
-        0
-    }
-
-    public func schedule(after delay: TimeInterval, action: @escaping @MainActor () -> Void) -> AnyObject {
-        action()
-        return NSObject()
-    }
-
-    public func cancel(_ token: AnyObject) {}
-
-    public func performWrite(
-        _ work: @escaping @Sendable () -> BrightnessBackendUsed,
-        completion: @escaping @MainActor (BrightnessBackendUsed) -> Void
-    ) {
-        completion(work())
     }
 }

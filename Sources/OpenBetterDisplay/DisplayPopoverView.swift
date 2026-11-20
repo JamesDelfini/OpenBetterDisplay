@@ -29,10 +29,7 @@ public struct DisplayPopoverView: View {
         }
         .padding(12)
         .frame(width: 320)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(red: 0.11, green: 0.11, blue: 0.14).opacity(0.88))
-        )
+        .background(Color(red: 0.08, green: 0.09, blue: 0.12).opacity(0.20))
         .preferredColorScheme(.dark)
         .onAppear {
             launchAtLogin = Self.readLaunchAtLoginStatus()
@@ -131,7 +128,7 @@ public struct DisplayPopoverView: View {
             }
             launchAtLogin = Self.readLaunchAtLoginStatus()
         } catch {
-            launchAtLogin = enabled
+            launchAtLogin = Self.readLaunchAtLoginStatus()
         }
     }
 }
@@ -353,6 +350,78 @@ public struct ResolutionControlRow: View {
     }
 }
 
+private struct HUDSlider: View {
+    let fraction: CGFloat
+    let showsFillAndThumb: Bool
+    let isInteractive: Bool
+    let onDragChanged: (CGFloat) -> Void
+    let onDragEnded: ((CGFloat) -> Void)?
+
+    private let trackHeight: CGFloat = 5.5
+    private let thumbDiameter: CGFloat = 18
+
+    init(
+        fraction: CGFloat,
+        showsFillAndThumb: Bool = true,
+        isInteractive: Bool = true,
+        onDragChanged: @escaping (CGFloat) -> Void,
+        onDragEnded: ((CGFloat) -> Void)? = nil
+    ) {
+        self.fraction = min(max(0, fraction), 1)
+        self.showsFillAndThumb = showsFillAndThumb
+        self.isInteractive = isInteractive
+        self.onDragChanged = onDragChanged
+        self.onDragEnded = onDragEnded
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let totalWidth = max(thumbDiameter, geometry.size.width)
+            let usableWidth = max(1, totalWidth - thumbDiameter)
+            let thumbRadius = thumbDiameter / 2
+            let thumbCenterX = thumbRadius + usableWidth * fraction
+
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.18))
+                    .frame(height: trackHeight)
+
+                if showsFillAndThumb {
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(isInteractive ? 0.92 : 0.72))
+                        .frame(width: max(trackHeight, thumbCenterX), height: trackHeight)
+
+                    Circle()
+                        .fill(Color.white.opacity(isInteractive ? 0.96 : 0.78))
+                        .frame(width: thumbDiameter, height: thumbDiameter)
+                        .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
+                        .offset(x: thumbCenterX - thumbRadius)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        guard isInteractive else { return }
+                        onDragChanged(normalizedFraction(for: gesture.location.x, usableWidth: usableWidth))
+                    }
+                    .onEnded { gesture in
+                        guard isInteractive, let onDragEnded else { return }
+                        onDragEnded(normalizedFraction(for: gesture.location.x, usableWidth: usableWidth))
+                    }
+            )
+        }
+        .frame(height: 20)
+    }
+
+    private func normalizedFraction(for x: CGFloat, usableWidth: CGFloat) -> CGFloat {
+        let thumbRadius = thumbDiameter / 2
+        let clampedX = min(max(x - thumbRadius, 0), usableWidth)
+        return clampedX / usableWidth
+    }
+}
+
 public struct SteppedResolutionSlider: View {
     let stepCount: Int
     let selectedIndex: Int
@@ -361,9 +430,6 @@ public struct SteppedResolutionSlider: View {
     let onCommitStep: (Int) -> Void
 
     @State private var lastPreviewedIndex: Int?
-
-    private let trackHeight: CGFloat = 5.5
-    private let thumbDiameter: CGFloat = 18
 
     private var isInteractive: Bool {
         stepCount > 1
@@ -381,50 +447,23 @@ public struct SteppedResolutionSlider: View {
     }
 
     public var body: some View {
-        GeometryReader { geometry in
-            let totalWidth = max(thumbDiameter, geometry.size.width)
-            let usableWidth = max(1, totalWidth - thumbDiameter)
-            let thumbRadius = thumbDiameter / 2
-            let thumbCenterX = thumbRadius + usableWidth * progressFraction
-
-            ZStack(alignment: .leading) {
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.18))
-                    .frame(height: trackHeight)
-
-                if stepCount > 0 {
-                    Capsule(style: .continuous)
-                        .fill(Color.white.opacity(isInteractive ? 0.92 : 0.72))
-                        .frame(width: max(trackHeight, thumbCenterX), height: trackHeight)
-
-                    Circle()
-                        .fill(Color.white.opacity(isInteractive ? 0.96 : 0.78))
-                        .frame(width: thumbDiameter, height: thumbDiameter)
-                        .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
-                        .offset(x: thumbCenterX - thumbRadius)
+        HUDSlider(
+            fraction: progressFraction,
+            showsFillAndThumb: stepCount > 0,
+            isInteractive: isInteractive,
+            onDragChanged: { fraction in
+                let index = stepIndex(for: fraction)
+                if lastPreviewedIndex != index {
+                    lastPreviewedIndex = index
+                    onPreviewStep(index)
                 }
+            },
+            onDragEnded: { fraction in
+                let index = stepIndex(for: fraction)
+                lastPreviewedIndex = nil
+                onCommitStep(index)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        guard isInteractive else { return }
-                        let index = stepIndex(for: value.location.x, totalWidth: totalWidth)
-                        if lastPreviewedIndex != index {
-                            lastPreviewedIndex = index
-                            onPreviewStep(index)
-                        }
-                    }
-                    .onEnded { value in
-                        guard isInteractive else { return }
-                        let index = stepIndex(for: value.location.x, totalWidth: totalWidth)
-                        lastPreviewedIndex = nil
-                        onCommitStep(index)
-                    }
-            )
-        }
-        .frame(height: 20)
+        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Resolution")
         .accessibilityValue(accessibilityValue)
@@ -443,13 +482,40 @@ public struct SteppedResolutionSlider: View {
         }
     }
 
-    private func stepIndex(for x: CGFloat, totalWidth: CGFloat) -> Int {
+    private func stepIndex(for fraction: CGFloat) -> Int {
         guard stepCount > 1 else { return 0 }
-        let thumbRadius = thumbDiameter / 2
-        let usableWidth = max(1, totalWidth - thumbDiameter)
-        let clampedX = min(max(x - thumbRadius, 0), usableWidth)
-        let fraction = clampedX / usableWidth
         return Int((fraction * CGFloat(stepCount - 1)).rounded())
+    }
+}
+
+private struct HUDBrightnessSlider: View {
+    @Binding var value: Double
+    let percentage: Int
+
+    var body: some View {
+        HUDSlider(
+            fraction: CGFloat(max(0.0, min(1.0, value))),
+            onDragChanged: { fraction in
+                let nextValue = Double(fraction)
+                if nextValue != value,
+                   nextValue == 0.0 || nextValue == 1.0 || abs(nextValue - value) > 0.0005 {
+                    value = nextValue
+                }
+            }
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Brightness")
+        .accessibilityValue("\(percentage)%")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment:
+                value = min(1.0, value + 0.05)
+            case .decrement:
+                value = max(0.0, value - 0.05)
+            @unknown default:
+                break
+            }
+        }
     }
 }
 
@@ -466,67 +532,6 @@ public struct MainDisplayBadge: View {
                     .fill(Color.white.opacity(0.62))
             )
             .help("Main Display")
-    }
-}
-
-private struct HUDBrightnessSlider: View {
-    @Binding var value: Double
-    let percentage: Int
-
-    private let trackHeight: CGFloat = 5.5
-    private let thumbDiameter: CGFloat = 18
-
-    var body: some View {
-        GeometryReader { geometry in
-            let clamped = max(0.0, min(1.0, value))
-            let totalWidth = max(thumbDiameter, geometry.size.width)
-            let usableWidth = max(1, totalWidth - thumbDiameter)
-            let thumbRadius = thumbDiameter / 2
-            let thumbCenterX = thumbRadius + usableWidth * CGFloat(clamped)
-
-            ZStack(alignment: .leading) {
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.18))
-                    .frame(height: trackHeight)
-
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.92))
-                    .frame(width: max(trackHeight, thumbCenterX), height: trackHeight)
-
-                Circle()
-                    .fill(Color.white.opacity(0.96))
-                    .frame(width: thumbDiameter, height: thumbDiameter)
-                    .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
-                    .offset(x: thumbCenterX - thumbRadius)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { gesture in
-                        let normalized = Double((gesture.location.x - thumbRadius) / usableWidth)
-                        let nextValue = max(0.0, min(1.0, normalized))
-                        if nextValue != value,
-                           nextValue == 0.0 || nextValue == 1.0 || abs(nextValue - value) > 0.0005 {
-                            value = nextValue
-                        }
-                    }
-            )
-        }
-        .frame(height: 20)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Brightness")
-        .accessibilityValue("\(percentage)%")
-        .accessibilityAdjustableAction { direction in
-            switch direction {
-            case .increment:
-                value = min(1.0, value + 0.05)
-            case .decrement:
-                value = max(0.0, value - 0.05)
-            @unknown default:
-                break
-            }
-        }
     }
 }
 

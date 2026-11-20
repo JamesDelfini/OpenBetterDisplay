@@ -6,15 +6,32 @@ public final class DisplayCoordinator: ObservableObject {
     @Published public private(set) var displays: [DisplayState] = []
 
     private let driver: DisplayDriver
+    private let brightnessStore: BrightnessPersistence
+    private let ddcThrottleInterval: TimeInterval
+    private let writeScheduler: BrightnessWriteScheduling
     private var lastKnownRawDisplays: [UInt32: RawDisplayInfo] = [:]
     private var disconnectedDisplays: [UInt32: RawDisplayInfo] = [:]
+    private var knownEnabledDisplayIDs: Set<UInt32> = []
+    private var persistenceKeysByDisplayID: [UInt32: String] = [:]
+    private var pendingDDCLevels: [UInt32: Double] = [:]
+    private var scheduledDDCTokens: [UInt32: AnyObject] = [:]
+    private var lastDDCWriteTime: [UInt32: TimeInterval] = [:]
+    private var inFlightDDCLevels: [UInt32: Double] = [:]
 
     public var hasDisconnectedDisplays: Bool {
         displays.contains(where: { !$0.isEnabled })
     }
 
-    public init(driver: DisplayDriver) {
+    public init(
+        driver: DisplayDriver,
+        brightnessStore: BrightnessPersistence = UserDefaultsBrightnessStore(),
+        ddcThrottleInterval: TimeInterval = 0.06,
+        writeScheduler: BrightnessWriteScheduling? = nil
+    ) {
         self.driver = driver
+        self.brightnessStore = brightnessStore
+        self.ddcThrottleInterval = max(0, ddcThrottleInterval)
+        self.writeScheduler = writeScheduler ?? MainQueueBrightnessWriteScheduler()
         refreshDisplays()
     }
 
@@ -73,6 +90,8 @@ public final class DisplayCoordinator: ObservableObject {
             )
             do {
                 try driver.setDisplayEnabled(displayID, enabled: false)
+                cancelPendingDDCWrite(for: displayID)
+                lastDDCWriteTime.removeValue(forKey: displayID)
                 var cached = rawToCache
                 cached.isActive = false
                 cached.isMain = false
@@ -127,13 +146,16 @@ public final class DisplayCoordinator: ObservableObject {
         reconnectAllDisplays()
     }
 
-    /// Lifecycle hook: app is terminating — re-enable all disconnected displays and restore gamma.
+    /// Lifecycle hook: app is terminating — cancel pending DDC writes, re-enable all disconnected displays, and restore gamma.
     public func handleAppWillTerminate() {
+        cancelAllPendingDDCWrites()
         reconnectAllDisplays()
+        cancelAllPendingDDCWrites()
         driver.resetSoftwareGamma()
     }
 
     public func refreshDisplays() {
+        let previousDisplaysByID = Dictionary(uniqueKeysWithValues: displays.map { ($0.displayID, $0) })
         let online = driver.fetchOnlineDisplays()
         var mergedByID: [UInt32: RawDisplayInfo] = [:]
 
@@ -164,16 +186,56 @@ public final class DisplayCoordinator: ObservableObject {
             return lhs.displayID < rhs.displayID
         }
 
-        let enabledCount = sorted.filter { raw in
-            disconnectedDisplays[raw.displayID] == nil && raw.isActive
-        }.count
+        let currentEnabledIDs = Set(sorted.compactMap { raw -> UInt32? in
+            let isEnabled = disconnectedDisplays[raw.displayID] == nil && raw.isActive
+            return isEnabled ? raw.displayID : nil
+        })
+        let removedEnabledIDs = knownEnabledDisplayIDs.subtracting(currentEnabledIDs)
+        for removedID in removedEnabledIDs {
+            cancelPendingDDCWrite(for: removedID)
+            lastDDCWriteTime.removeValue(forKey: removedID)
+        }
+
+        let enabledCount = currentEnabledIDs.count
+        var updatedKeys: [UInt32: String] = [:]
 
         displays = sorted.map { raw in
-            let isEnabled = disconnectedDisplays[raw.displayID] == nil && raw.isActive
+            let isEnabled = currentEnabledIDs.contains(raw.displayID)
             let isMain = isEnabled && raw.isMain
             let canToggleOff = isEnabled && !isMain && enabledCount > 1
             let availableModes = Self.filterDisplayModes(for: raw)
             let resolvedCurrentModeID = Self.resolveCurrentModeID(for: raw, availableModes: availableModes)
+
+            let persistenceKey = Self.persistenceKey(for: raw)
+            updatedKeys[raw.displayID] = persistenceKey
+
+            let brightness: Double
+            let backend: BrightnessBackendUsed
+
+            if !isEnabled {
+                if let previous = previousDisplaysByID[raw.displayID] {
+                    brightness = previous.brightness
+                    backend = previous.brightnessBackend
+                } else if let savedLevel = brightnessStore.brightness(forKey: persistenceKey) {
+                    brightness = max(0.0, min(1.0, savedLevel))
+                    backend = raw.isBuiltIn ? .nativeAppleBacklight : .hardwareDDC
+                } else {
+                    brightness = 1.0
+                    backend = raw.isBuiltIn ? .nativeAppleBacklight : .hardwareDDC
+                }
+            } else if let activeDDCLevel = pendingDDCLevels[raw.displayID] ?? inFlightDDCLevels[raw.displayID] {
+                brightness = activeDDCLevel
+                backend = .hardwareDDC
+            } else if !knownEnabledDisplayIDs.contains(raw.displayID),
+                      let savedLevel = brightnessStore.brightness(forKey: persistenceKey) {
+                let clampedSaved = max(0.0, min(1.0, savedLevel))
+                backend = driver.setBrightness(raw.displayID, level: clampedSaved)
+                brightness = clampedSaved
+            } else {
+                let reading = driver.getBrightness(raw.displayID)
+                brightness = max(0.0, min(1.0, reading.level))
+                backend = reading.backend
+            }
 
             return DisplayState(
                 displayID: raw.displayID,
@@ -183,10 +245,126 @@ public final class DisplayCoordinator: ObservableObject {
                 isEnabled: isEnabled,
                 canToggleOff: canToggleOff,
                 symbolName: raw.isBuiltIn ? "laptopcomputer" : "display",
+                brightness: brightness,
+                brightnessBackend: backend,
                 availableModes: availableModes,
                 currentModeID: resolvedCurrentModeID
             )
         }
+
+        persistenceKeysByDisplayID = updatedKeys
+        knownEnabledDisplayIDs = currentEnabledIDs
+    }
+
+    public func setBrightness(_ displayID: UInt32, level: Double) {
+        let clamped = max(0.0, min(1.0, level))
+
+        guard let index = displays.firstIndex(where: { $0.displayID == displayID }) else {
+            return
+        }
+        guard displays[index].isEnabled else {
+            return
+        }
+
+        if let persistenceKey = persistenceKeysByDisplayID[displayID] {
+            brightnessStore.setBrightness(clamped, forKey: persistenceKey)
+        }
+
+        displays[index].brightness = clamped
+
+        if displays[index].brightnessBackend == .hardwareDDC, ddcThrottleInterval > 0 {
+            pendingDDCLevels[displayID] = clamped
+            scheduleOrFlushDDCWrite(for: displayID)
+        } else {
+            cancelPendingDDCWrite(for: displayID)
+            let backend = driver.setBrightness(displayID, level: clamped)
+            displays[index].brightnessBackend = backend
+        }
+    }
+
+    private func scheduleOrFlushDDCWrite(for displayID: UInt32) {
+        guard inFlightDDCLevels[displayID] == nil else { return }
+
+        let now = writeScheduler.now()
+        if let lastWrite = lastDDCWriteTime[displayID] {
+            let elapsed = now - lastWrite
+            if elapsed < ddcThrottleInterval {
+                if scheduledDDCTokens[displayID] == nil {
+                    let remaining = ddcThrottleInterval - elapsed
+                    let token = writeScheduler.schedule(after: remaining) { [weak self] in
+                        guard let self else { return }
+                        self.scheduledDDCTokens.removeValue(forKey: displayID)
+                        self.flushDDCWrite(for: displayID)
+                    }
+                    scheduledDDCTokens[displayID] = token
+                }
+                return
+            }
+        }
+
+        if let token = scheduledDDCTokens.removeValue(forKey: displayID) {
+            writeScheduler.cancel(token)
+        }
+        flushDDCWrite(for: displayID)
+    }
+
+    private func flushDDCWrite(for displayID: UInt32) {
+        guard let targetLevel = pendingDDCLevels.removeValue(forKey: displayID) else { return }
+        guard knownEnabledDisplayIDs.contains(displayID) else { return }
+
+        inFlightDDCLevels[displayID] = targetLevel
+        lastDDCWriteTime[displayID] = writeScheduler.now()
+
+        let driver = self.driver
+        writeScheduler.performWrite({
+            driver.setBrightness(displayID, level: targetLevel)
+        }) { [weak self] backend in
+            guard let self else { return }
+            self.inFlightDDCLevels.removeValue(forKey: displayID)
+
+            if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
+                self.displays[index].brightnessBackend = backend
+            }
+
+            if self.pendingDDCLevels[displayID] != nil {
+                if backend == .hardwareDDC, self.ddcThrottleInterval > 0 {
+                    self.scheduleOrFlushDDCWrite(for: displayID)
+                } else if let trailingLevel = self.pendingDDCLevels.removeValue(forKey: displayID) {
+                    let nextBackend = self.driver.setBrightness(displayID, level: trailingLevel)
+                    if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
+                        self.displays[index].brightnessBackend = nextBackend
+                    }
+                }
+            }
+        }
+    }
+
+    private func cancelPendingDDCWrite(for displayID: UInt32) {
+        pendingDDCLevels.removeValue(forKey: displayID)
+        if let token = scheduledDDCTokens.removeValue(forKey: displayID) {
+            writeScheduler.cancel(token)
+        }
+    }
+
+    private func cancelAllPendingDDCWrites() {
+        for token in scheduledDDCTokens.values {
+            writeScheduler.cancel(token)
+        }
+        scheduledDDCTokens.removeAll()
+        pendingDDCLevels.removeAll()
+    }
+
+    private static func persistenceKey(for raw: RawDisplayInfo) -> String {
+        if raw.isBuiltIn {
+            return "builtin"
+        }
+        if raw.serialNumber != 0 {
+            return String(format: "hardware:%04X:%04X:%08X", raw.vendorID, raw.modelID, raw.serialNumber)
+        }
+        if raw.vendorID != 0 || raw.modelID != 0 {
+            return String(format: "display:%04X:%04X:%u", raw.vendorID, raw.modelID, raw.displayID)
+        }
+        return "display:\(raw.displayID)"
     }
 
     public func previewResolution(_ displayID: UInt32, modeID: Int32) {

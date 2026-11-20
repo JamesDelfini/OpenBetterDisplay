@@ -152,9 +152,12 @@ public struct DisplayCardView: View {
 
     @ViewBuilder
     private var displayControls: some View {
-        ResolutionControlRow(display: display, coordinator: coordinator)
-            .padding(.horizontal, 10)
-            .padding(.bottom, 4)
+        VStack(alignment: .leading, spacing: 10) {
+            BrightnessControlRow(display: display, coordinator: coordinator)
+            ResolutionControlRow(display: display, coordinator: coordinator)
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 4)
     }
 
     private var toggleLockReason: DisplayToggleLockReason? {
@@ -228,6 +231,45 @@ public struct DisplayCardView: View {
                         )
                 )
         )
+    }
+}
+
+public struct BrightnessControlRow: View {
+    let display: DisplayState
+    @ObservedObject var coordinator: DisplayCoordinator
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Brightness")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.68))
+
+                Spacer(minLength: 8)
+
+                Text("\(display.brightnessPercentage)%")
+                    .font(.system(size: 12, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.76))
+            }
+
+            HStack(spacing: 10) {
+                Image(systemName: "sun.max.fill")
+                    .font(.system(size: 13.5, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .frame(width: 20, height: 18, alignment: .center)
+
+                HUDBrightnessSlider(
+                    value: Binding(
+                        get: { display.brightness },
+                        set: { newLevel in
+                            coordinator.setBrightness(display.displayID, level: newLevel)
+                        }
+                    ),
+                    percentage: display.brightnessPercentage
+                )
+            }
+        }
     }
 }
 
@@ -424,6 +466,67 @@ public struct MainDisplayBadge: View {
                     .fill(Color.white.opacity(0.62))
             )
             .help("Main Display")
+    }
+}
+
+private struct HUDBrightnessSlider: View {
+    @Binding var value: Double
+    let percentage: Int
+
+    private let trackHeight: CGFloat = 5.5
+    private let thumbDiameter: CGFloat = 18
+
+    var body: some View {
+        GeometryReader { geometry in
+            let clamped = max(0.0, min(1.0, value))
+            let totalWidth = max(thumbDiameter, geometry.size.width)
+            let usableWidth = max(1, totalWidth - thumbDiameter)
+            let thumbRadius = thumbDiameter / 2
+            let thumbCenterX = thumbRadius + usableWidth * CGFloat(clamped)
+
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.18))
+                    .frame(height: trackHeight)
+
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.92))
+                    .frame(width: max(trackHeight, thumbCenterX), height: trackHeight)
+
+                Circle()
+                    .fill(Color.white.opacity(0.96))
+                    .frame(width: thumbDiameter, height: thumbDiameter)
+                    .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
+                    .offset(x: thumbCenterX - thumbRadius)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        let normalized = Double((gesture.location.x - thumbRadius) / usableWidth)
+                        let nextValue = max(0.0, min(1.0, normalized))
+                        if nextValue != value,
+                           nextValue == 0.0 || nextValue == 1.0 || abs(nextValue - value) > 0.0005 {
+                            value = nextValue
+                        }
+                    }
+            )
+        }
+        .frame(height: 20)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Brightness")
+        .accessibilityValue("\(percentage)%")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment:
+                value = min(1.0, value + 0.05)
+            case .decrement:
+                value = max(0.0, value - 0.05)
+            @unknown default:
+                break
+            }
+        }
     }
 }
 

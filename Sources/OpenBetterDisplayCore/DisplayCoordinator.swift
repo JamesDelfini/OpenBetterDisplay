@@ -33,6 +33,7 @@ public final class DisplayCoordinator: ObservableObject {
                 name: Self.humanReadableName(for: raw),
                 isBuiltIn: raw.isBuiltIn,
                 isMain: raw.isMain,
+                isEnabled: raw.isActive,
                 symbolName: raw.isBuiltIn ? "laptopcomputer" : "display",
                 availableModes: availableModes,
                 currentModeID: resolvedCurrentModeID
@@ -41,7 +42,8 @@ public final class DisplayCoordinator: ObservableObject {
     }
 
     public func previewResolution(_ displayID: UInt32, modeID: Int32) {
-        guard let index = displays.firstIndex(where: { $0.displayID == displayID }) else {
+        guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
+              displays[index].isEnabled else {
             return
         }
         guard displays[index].availableModes.contains(where: { $0.modeID == modeID }) else {
@@ -51,7 +53,8 @@ public final class DisplayCoordinator: ObservableObject {
     }
 
     public func previewResolution(_ displayID: UInt32, stepIndex: Int) {
-        guard let index = displays.firstIndex(where: { $0.displayID == displayID }) else {
+        guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
+              displays[index].isEnabled else {
             return
         }
         let modes = displays[index].availableModes
@@ -63,7 +66,8 @@ public final class DisplayCoordinator: ObservableObject {
     }
 
     public func commitResolution(_ displayID: UInt32, modeID: Int32? = nil) {
-        guard let index = displays.firstIndex(where: { $0.displayID == displayID }) else {
+        guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
+              displays[index].isEnabled else {
             return
         }
         let targetModeID = modeID ?? displays[index].previewModeID
@@ -81,8 +85,12 @@ public final class DisplayCoordinator: ObservableObject {
             return
         }
 
-        displays[index].currentModeID = targetModeID
-        try? driver.setDisplayMode(displayID, modeID: targetModeID)
+        do {
+            try driver.setDisplayMode(displayID, modeID: targetModeID)
+            displays[index].currentModeID = targetModeID
+        } catch {
+            // Preserve currentModeID if macOS rejects the display mode switch.
+        }
     }
 
     private static func resolveCurrentModeID(
@@ -114,23 +122,47 @@ public final class DisplayCoordinator: ObservableObject {
         let (nativePixelWidth, nativePixelHeight) = resolveNativePixelDimensions(for: raw, usableModes: usableModes)
         let nativeAspect = Double(nativePixelWidth) / Double(nativePixelHeight)
 
-        let currentRefreshRate: Double = {
-            if let active = raw.modes.first(where: { $0.modeID == raw.currentModeID }) {
-                return active.refreshRate
-            }
-            return usableModes.first?.refreshRate ?? 60.0
-        }()
-
-        let aspectAndRateFiltered = usableModes.filter { mode in
+        let aspectMatching = usableModes.filter { mode in
             let aspect = Double(mode.width) / Double(mode.height)
-            let matchesAspect = abs(aspect - nativeAspect) <= 0.025
-            let matchesRefreshRate = abs(mode.refreshRate - currentRefreshRate) <= 0.5
-            return matchesAspect && matchesRefreshRate
+            return abs(aspect - nativeAspect) <= 0.025
+        }
+        let aspectFiltered = aspectMatching.isEmpty ? usableModes : aspectMatching
+
+        let activeRawMode = raw.modes.first(where: { $0.modeID == raw.currentModeID })
+        let candidatePool: [RawDisplayMode]
+        if let activeRate = activeRawMode?.refreshRate {
+            if activeRate <= 0.5 {
+                let variableRateModes = aspectFiltered.filter { $0.refreshRate <= 0.5 }
+                if variableRateModes.count >= 2 || variableRateModes.count == aspectFiltered.count {
+                    candidatePool = variableRateModes
+                } else {
+                    candidatePool = aspectFiltered
+                }
+            } else {
+                let matchingRateModes = aspectFiltered.filter { abs($0.refreshRate - activeRate) <= 0.5 }
+                candidatePool = matchingRateModes.isEmpty ? aspectFiltered : matchingRateModes
+            }
+        } else if aspectFiltered.allSatisfy({ $0.refreshRate <= 0.5 }) {
+            candidatePool = aspectFiltered
+        } else {
+            let maxRate = aspectFiltered.map(\.refreshRate).max() ?? 60.0
+            let matchingRateModes = aspectFiltered.filter { abs($0.refreshRate - maxRate) <= 0.5 }
+            candidatePool = matchingRateModes.isEmpty ? aspectFiltered : matchingRateModes
         }
 
-        let candidatePool = aspectAndRateFiltered.isEmpty ? usableModes : aspectAndRateFiltered
         let hiDPICandidates = candidatePool.filter { $0.pixelWidth > $0.width }
-        let preferredModes = hiDPICandidates.isEmpty ? candidatePool : hiDPICandidates
+        let standardCandidates = candidatePool.filter { $0.pixelWidth <= $0.width }
+        let isActiveModeHiDPI = activeRawMode.map { $0.pixelWidth > $0.width } ?? false
+        let isRetinaOrHighDensityPanel = (raw.isBuiltIn && nativePixelWidth >= 2560)
+            || nativePixelWidth >= 3000
+            || (isActiveModeHiDPI && hiDPICandidates.count >= 2)
+
+        let preferredModes: [RawDisplayMode]
+        if !hiDPICandidates.isEmpty && (isRetinaOrHighDensityPanel || standardCandidates.isEmpty) {
+            preferredModes = hiDPICandidates
+        } else {
+            preferredModes = standardCandidates.isEmpty ? candidatePool : standardCandidates
+        }
 
         var deduplicatedByResolution: [String: RawDisplayMode] = [:]
         for mode in preferredModes {
@@ -138,8 +170,11 @@ public final class DisplayCoordinator: ObservableObject {
             if let existing = deduplicatedByResolution[key] {
                 if mode.modeID == raw.currentModeID {
                     deduplicatedByResolution[key] = mode
-                } else if existing.modeID != raw.currentModeID && mode.pixelWidth > existing.pixelWidth {
-                    deduplicatedByResolution[key] = mode
+                } else if existing.modeID != raw.currentModeID {
+                    if mode.pixelWidth > existing.pixelWidth
+                        || (mode.pixelWidth == existing.pixelWidth && mode.refreshRate > existing.refreshRate) {
+                        deduplicatedByResolution[key] = mode
+                    }
                 }
             } else {
                 deduplicatedByResolution[key] = mode
@@ -187,8 +222,27 @@ public final class DisplayCoordinator: ObservableObject {
         for raw: RawDisplayInfo,
         usableModes: [RawDisplayMode]
     ) -> (Int, Int) {
+        let nativeFlaggedModes = usableModes.filter(\.isNative)
+        if let native1x = nativeFlaggedModes.first(where: { $0.pixelWidth == $0.width && $0.pixelHeight == $0.height }) {
+            return (native1x.pixelWidth, native1x.pixelHeight)
+        }
+        if let nativeMode = nativeFlaggedModes.first {
+            return (nativeMode.pixelWidth, nativeMode.pixelHeight)
+        }
+
         let maxLogicalWidth = usableModes.map(\.width).max() ?? 0
         let oneXModes = usableModes.filter { $0.pixelWidth == $0.width && $0.pixelHeight == $0.height }
+        if let active = usableModes.first(where: { $0.modeID == raw.currentModeID }) {
+            let activeAspect = Double(active.width) / Double(active.height)
+            let matchingActiveAspect1x = oneXModes
+                .filter { abs((Double($0.width) / Double($0.height)) - activeAspect) <= 0.025 }
+                .max(by: { ($0.width * $0.height) < ($1.width * $1.height) })
+            if let matchingActiveAspect1x,
+               Double(matchingActiveAspect1x.pixelWidth) >= Double(maxLogicalWidth) * 0.90 {
+                return (matchingActiveAspect1x.pixelWidth, matchingActiveAspect1x.pixelHeight)
+            }
+        }
+
         if let highest1x = oneXModes.max(by: { ($0.width * $0.height) < ($1.width * $1.height) }),
            highest1x.pixelWidth >= maxLogicalWidth {
             return (highest1x.pixelWidth, highest1x.pixelHeight)

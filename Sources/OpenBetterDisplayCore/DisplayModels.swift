@@ -24,6 +24,7 @@ public struct RawDisplayMode: Equatable, Sendable {
     public var pixelHeight: Int
     public var refreshRate: Double
     public var isUsableForDesktopGUI: Bool
+    public var isNative: Bool
 
     public init(
         modeID: Int32,
@@ -32,7 +33,8 @@ public struct RawDisplayMode: Equatable, Sendable {
         pixelWidth: Int? = nil,
         pixelHeight: Int? = nil,
         refreshRate: Double = 60.0,
-        isUsableForDesktopGUI: Bool = true
+        isUsableForDesktopGUI: Bool = true,
+        isNative: Bool = false
     ) {
         self.modeID = modeID
         self.width = width
@@ -41,6 +43,7 @@ public struct RawDisplayMode: Equatable, Sendable {
         self.pixelHeight = pixelHeight ?? height
         self.refreshRate = refreshRate
         self.isUsableForDesktopGUI = isUsableForDesktopGUI
+        self.isNative = isNative
     }
 }
 

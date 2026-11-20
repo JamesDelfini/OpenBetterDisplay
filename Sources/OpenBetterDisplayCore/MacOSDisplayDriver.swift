@@ -163,25 +163,43 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
     }
 
     public func setMainDisplay(_ displayID: UInt32) throws {
+        guard CGDisplayIsActive(displayID) != 0 else {
+            throw DisplayDriverError.configurationFailed(CGError.illegalArgument.rawValue)
+        }
+
         let targetBounds = CGDisplayBounds(displayID)
         let offsetX = -Int32(targetBounds.origin.x.rounded())
         let offsetY = -Int32(targetBounds.origin.y.rounded())
 
-        let activeIDs = collectConnectedDisplayIDs().filter { CGDisplayIsActive($0) != 0 }
+        var activeIDs = collectConnectedDisplayIDs().filter { CGDisplayIsActive($0) != 0 }
+        if !activeIDs.contains(displayID) {
+            activeIDs.append(displayID)
+        }
+
         var configRef: CGDisplayConfigRef?
         let beginErr = CGBeginDisplayConfiguration(&configRef)
         guard beginErr == .success, let configRef else {
             throw DisplayDriverError.configurationFailed(beginErr.rawValue)
         }
 
-        for id in activeIDs {
-            if id == displayID {
-                CGConfigureDisplayOrigin(configRef, id, 0, 0)
-            } else {
-                let bounds = CGDisplayBounds(id)
-                let newX = Int32(bounds.origin.x.rounded()) + offsetX
-                let newY = Int32(bounds.origin.y.rounded()) + offsetY
-                CGConfigureDisplayOrigin(configRef, id, newX, newY)
+        let targetErr = CGConfigureDisplayOrigin(configRef, displayID, 0, 0)
+        guard targetErr == .success else {
+            CGCancelDisplayConfiguration(configRef)
+            throw DisplayDriverError.configurationFailed(targetErr.rawValue)
+        }
+
+        for id in activeIDs where id != displayID {
+            // Skip displays that mirror another display; their origin follows their primary.
+            if CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay {
+                continue
+            }
+            let bounds = CGDisplayBounds(id)
+            let newX = Int32(bounds.origin.x.rounded()) + offsetX
+            let newY = Int32(bounds.origin.y.rounded()) + offsetY
+            let originErr = CGConfigureDisplayOrigin(configRef, id, newX, newY)
+            guard originErr == .success else {
+                CGCancelDisplayConfiguration(configRef)
+                throw DisplayDriverError.configurationFailed(originErr.rawValue)
             }
         }
 

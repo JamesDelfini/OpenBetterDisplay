@@ -147,14 +147,28 @@ public struct DisplayCardView: View {
         }
     }
 
+    private var isExpanded: Bool {
+        coordinator.expandedDisplayID == display.displayID
+    }
+
     @ViewBuilder
     private var displayControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             BrightnessControlRow(display: display, coordinator: coordinator)
             ResolutionControlRow(display: display, coordinator: coordinator)
+
+            DisplayDisclosureChevron(isExpanded: isExpanded, displayName: display.name) {
+                coordinator.toggleExpandedDisplay(display.displayID)
+            }
+
+            if isExpanded {
+                MainDisplayDrawerRow(display: display) {
+                    coordinator.setMainDisplay(display.displayID)
+                }
+            }
         }
         .padding(.horizontal, 10)
-        .padding(.bottom, 4)
+        .padding(.bottom, 2)
     }
 
     private var toggleLockReason: DisplayToggleLockReason? {
@@ -184,10 +198,6 @@ public struct DisplayCardView: View {
 
             if display.isMain {
                 MainDisplayBadge()
-            } else if display.canSetAsMain {
-                SetMainDisplayButton(displayName: display.name) {
-                    coordinator.setMainDisplay(display.displayID)
-                }
             }
 
             Spacer(minLength: 8)
@@ -535,40 +545,103 @@ public struct MainDisplayBadge: View {
     }
 }
 
-public struct SetMainDisplayButton: View {
+private struct DisplayDisclosureChevron: View {
+    let isExpanded: Bool
     let displayName: String
     let action: () -> Void
     @State private var isHovering = false
 
-    public init(displayName: String, action: @escaping () -> Void) {
-        self.displayName = displayName
-        self.action = action
-    }
-
-    public var body: some View {
+    var body: some View {
         Button(action: action) {
-            Text("M")
-                .font(.system(size: 9.5, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(isHovering ? 0.95 : 0.55))
-                .frame(width: 16, height: 16)
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity(isHovering ? 0.22 : 0.06))
-                )
-                .overlay(
-                    Circle()
-                        .strokeBorder(
-                            Color.white.opacity(isHovering ? 0.65 : 0.28),
-                            lineWidth: 0.9
-                        )
-                )
+            HStack {
+                Spacer()
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(isHovering ? 0.85 : 0.48))
+                Spacer()
+            }
+            .frame(height: 16)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering in
             isHovering = hovering
         }
-        .help("Set as Main Display")
-        .accessibilityLabel("Set \(displayName) as Main Display")
+        .help(isExpanded ? "Hide actions for \(displayName)" : "Show actions for \(displayName)")
+        .accessibilityLabel(isExpanded ? "Collapse \(displayName) actions" : "Expand \(displayName) actions")
+    }
+}
+
+private struct MainDisplayDrawerRow: View {
+    let display: DisplayState
+    let onSetAsMain: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        if display.isMain {
+            rowContent
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(display.name) is the Main Display")
+        } else {
+            Button(action: onSetAsMain) {
+                rowContent
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.white.opacity(isHovering ? 0.10 : 0.0))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                isHovering = hovering
+            }
+            .help("Set \(display.name) as Main Display")
+            .accessibilityLabel("Set \(display.name) as Main Display")
+        }
+    }
+
+    private var rowContent: some View {
+        let isMain = display.isMain
+        return HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(
+                        isMain
+                            ? Color.white.opacity(0.92)
+                            : Color.white.opacity(isHovering ? 0.14 : 0.08)
+                    )
+                    .overlay(
+                        Circle()
+                            .strokeBorder(
+                                isMain
+                                    ? Color.white.opacity(0.95)
+                                    : Color.white.opacity(isHovering ? 0.36 : 0.22),
+                                lineWidth: 0.8
+                            )
+                    )
+                    .frame(width: 22, height: 22)
+
+                Text("M")
+                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(
+                        isMain
+                            ? Color(red: 0.10, green: 0.11, blue: 0.14)
+                            : Color.white.opacity(isHovering ? 0.72 : 0.45)
+                    )
+            }
+
+            Text(isMain ? "Main Display" : "Set as Main Display")
+                .font(.system(size: 13.5, weight: .regular))
+                .foregroundStyle(
+                    isMain
+                        ? Color.white.opacity(0.95)
+                        : Color.white.opacity(isHovering ? 0.96 : 0.84)
+                )
+
+            Spacer()
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
     }
 }
 

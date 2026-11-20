@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 public final class DisplayCoordinator: ObservableObject {
     @Published public private(set) var displays: [DisplayState] = []
+    @Published public private(set) var expandedDisplayID: UInt32?
 
     private struct DDCThrottleState {
         var pendingLevel: Double?
@@ -71,6 +72,22 @@ public final class DisplayCoordinator: ObservableObject {
             return
         }
         setDisplayEnabled(displayID, enabled: !display.isEnabled)
+    }
+
+    public func toggleExpandedDisplay(_ displayID: UInt32) {
+        if expandedDisplayID == displayID {
+            expandedDisplayID = nil
+            return
+        }
+        guard let display = displays.first(where: { $0.displayID == displayID }),
+              display.isEnabled else {
+            return
+        }
+        expandedDisplayID = displayID
+    }
+
+    public func handlePopoverDidClose() {
+        expandedDisplayID = nil
     }
 
     public func setDisplayEnabled(_ displayID: UInt32, enabled: Bool) {
@@ -244,6 +261,10 @@ public final class DisplayCoordinator: ObservableObject {
 
         persistenceKeysByDisplayID = updatedKeys
         knownEnabledDisplayIDs = currentEnabledIDs
+
+        if let expandedID = expandedDisplayID, !currentEnabledIDs.contains(expandedID) {
+            expandedDisplayID = nil
+        }
     }
 
     /// Lightweight sync for built-in displays while the popover is visible,

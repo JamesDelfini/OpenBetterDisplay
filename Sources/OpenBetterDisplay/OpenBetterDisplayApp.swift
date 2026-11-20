@@ -120,7 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
-        stopPopoverMonitors()
+        handlePopoverClosed()
     }
 
     private func configurePopover(with coordinator: DisplayCoordinator) {
@@ -168,7 +168,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func closePopover(_ sender: Any?) {
         popover.performClose(sender)
+        handlePopoverClosed()
+    }
+
+    private func handlePopoverClosed() {
         stopPopoverMonitors()
+        coordinator?.handlePopoverDidClose()
     }
 
     private func startPopoverMonitors() {

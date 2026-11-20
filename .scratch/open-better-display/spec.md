@@ -16,9 +16,9 @@ While BetterDisplay solves this, it is closed-source, freemium/paid (`BetterDisp
 
 Build **OpenBetterDisplay**, a lightweight, open-source (MIT-licensed) native macOS menu bar application with a dark translucent popover modelled directly after BetterDisplay's core display card UI:
 
-- Lists all connected displays (both active and currently turned-off displays) with their human-readable names, display type icon (laptop vs. external monitor), Main Display (`M`) badge/button, and an on/off toggle switch.
+- Lists all connected displays (both Enabled Displays and Disconnected Displays) with their human-readable names, display type icon (laptop vs. external monitor), Main Display Badge (`M`) exclusively on the Main Display, and an on/off toggle switch.
 - Uses true OS-level display disconnect (`CGSConfigureDisplayEnabled`) to turn off a display so macOS consolidates windows onto remaining active displays and external monitors enter hardware standby, while keeping the turned-off display in the menu bar list so it can be toggled back on at any time.
-- Protects the user from losing all visual output by locking the off-toggle on the Main Display (`M`) and on the last remaining active display, allowing Main Display status (`M`) to be transferred to another active display with one click, and automatically reconnecting any turned-off displays on Mac wake-from-sleep and on app quit.
+- Protects the user from losing all visual output by locking the off-toggle on the Main Display and on the last remaining Enabled Display, allowing Main Display status to be transferred to another Enabled Display via its collapsible disclosure drawer, and automatically reconnecting any Disconnected Displays on Mac wake-from-sleep and on app quit.
 - Controls display brightness using native backlight control for the Built-in Display, DDC/CI (`IOAVService` I2C VCP `0x10`) hardware backlight control for external monitors, and automatic fallback to software gamma table dimming (`CGSetDisplayTransferByTable`) when a monitor does not support DDC.
 - Controls display resolution with a stepped horizontal slider (plus a clickable resolution label dropdown) filtered to clean native-aspect-ratio modes at the current refresh rate (preferring HiDPI modes on 4K/Retina displays and displaying scale percentages such as `2560x1440 · 133%`), previewing live while dragging and committing the mode change on mouse release.
 
@@ -32,7 +32,7 @@ Build **OpenBetterDisplay**, a lightweight, open-source (MIT-licensed) native ma
 6. As a macOS user, I want a display that I have toggled OFF to remain visible in OpenBetterDisplay's display list (with its toggle in the OFF state and its sliders collapsed), so that I can toggle it back ON whenever I want.
 7. As a macOS user, I want toggling a disconnected display back ON to re-enable it in macOS WindowServer and restore its Brightness and Resolution sliders in the popover, so that my multi-monitor workspace returns seamlessly.
 8. As a macOS user, I want the current Main Display to display an active `M` badge next to its name and have its turn-off toggle disabled, so that I never accidentally disconnect my primary menu-bar/dock display.
-9. As a macOS user, I want non-main active displays to show a clickable `M` ("Set as Main Display") button in their header pill, so that I can transfer Main Display status to another monitor if I want to turn the old Main Display off.
+9. As a macOS user, I want every Enabled Display to offer a collapsible disclosure drawer (`⌄`) below its sliders with a `Set as Main Display` row (dimmed `Ⓜ` icon on non-main Enabled Displays; bright active `Ⓜ` icon + `"Main Display"` label on the current Main Display), so that I can transfer Main Display status without cluttering non-main header pills with a Main Display Badge.
 10. As a macOS user, I want the turn-off toggle to be disabled whenever only one active display remains on, so that I cannot accidentally turn off all screens and lock myself out of visual output.
 11. As a macOS user, I want OpenBetterDisplay to automatically re-enable any turned-off displays when I quit the application, so that I am never left with a persistently disabled display and no menu bar UI to reconnect it.
 12. As a macOS user, I want OpenBetterDisplay to automatically re-enable any turned-off displays whenever my Mac wakes from sleep, so that all my monitors come back online predictably at the start of a session.
@@ -105,10 +105,11 @@ The system is divided into three layers with a single primary seam (`DisplayDriv
 
 - Uses an `NSStatusItem` in the macOS system status bar with an `NSPopover` backed by a dark `NSVisualEffectView` (`hudWindow` / `popover` material, vibrant dark appearance) hosting the SwiftUI view hierarchy.
 - Each Display Card renders:
-  - **Header Pill**: Rounded dark translucent container with display icon (`laptopcomputer` or `display`), display name, Main Display `M` indicator (solid badge when Main; subtle clickable `M` button with tooltip *"Set as Main Display"* when non-Main and active), and custom capsule toggle switch on the right (disabled with tooltip when `isMain` or last active display).
-  - **Controls Area (visible when display is ON)**:
+  - **Header Pill**: Rounded dark translucent container with display icon (`laptopcomputer` or `display`), display name, Main Display Badge (`M`, shown exclusively on the Main Display — omitted on non-main Enabled Displays and Disconnected Displays), and custom capsule toggle switch on the right (disabled with tooltip when `isMain` or last Enabled Display).
+  - **Controls Area (visible on Enabled Displays)**:
     - `Brightness` header row with current `<N>%` and horizontal slider with sun icon (`sun.max.fill`).
     - `Resolution` header row with clickable `<Width>x<Height>` (or `<Width>x<Height> · <Scale>%`) menu trigger and stepped horizontal slider with resolution icon (`arrow.up.left.and.arrow.down.right`).
+    - Collapsible single-open accordion disclosure chevron (`⌄` / `⌃`, collapsed by default; auto-collapses on disconnect, unplug, or popover close, stays open in place when `Set as Main Display` is clicked) revealing a footer-styled Main Display row: dimmed `Ⓜ` icon + clickable `"Set as Main Display"` on non-main Enabled Displays, and bright active `Ⓜ` icon + non-interactive `"Main Display"` on the current Main Display.
 - **Footer Section**:
   - Shows a prominent `Reconnect All Displays` button whenever any display is currently toggled OFF.
   - Includes `Launch at Login` toggle (`SMAppService.mainApp`) and `Quit OpenBetterDisplay` action.

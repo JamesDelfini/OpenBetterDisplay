@@ -104,58 +104,68 @@ public enum SkyLightDisplayModeDescription {
 }
 
 public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
-    private typealias CGSGetDisplayListFn = @convention(c) (
-        UInt32,
-        UnsafeMutablePointer<CGDirectDisplayID>?,
-        UnsafeMutablePointer<UInt32>?
-    ) -> CGError
+    private typealias CGSGetDisplayListFn =
+        @convention(c) (
+            UInt32,
+            UnsafeMutablePointer<CGDirectDisplayID>?,
+            UnsafeMutablePointer<UInt32>?
+        ) -> CGError
 
-    private typealias CGSConfigureDisplayEnabledFn = @convention(c) (
-        CGDisplayConfigRef?,
-        CGDirectDisplayID,
-        Bool
-    ) -> CGError
+    private typealias CGSConfigureDisplayEnabledFn =
+        @convention(c) (
+            CGDisplayConfigRef?,
+            CGDirectDisplayID,
+            Bool
+        ) -> CGError
 
-    private typealias CGSConfigureDisplayModeFn = @convention(c) (
-        CGDisplayConfigRef?,
-        CGDirectDisplayID,
-        Int32
-    ) -> CGError
+    private typealias CGSConfigureDisplayModeFn =
+        @convention(c) (
+            CGDisplayConfigRef?,
+            CGDirectDisplayID,
+            Int32
+        ) -> CGError
 
-    private typealias CGSGetNumberOfDisplayModesFn = @convention(c) (
-        CGDirectDisplayID,
-        UnsafeMutablePointer<Int32>
-    ) -> CGError
+    private typealias CGSGetNumberOfDisplayModesFn =
+        @convention(c) (
+            CGDirectDisplayID,
+            UnsafeMutablePointer<Int32>
+        ) -> CGError
 
-    private typealias CGSGetDisplayModeDescriptionOfLengthFn = @convention(c) (
-        CGDirectDisplayID,
-        Int32,
-        UnsafeMutableRawPointer,
-        Int32
-    ) -> CGError
+    private typealias CGSGetDisplayModeDescriptionOfLengthFn =
+        @convention(c) (
+            CGDirectDisplayID,
+            Int32,
+            UnsafeMutableRawPointer,
+            Int32
+        ) -> CGError
 
-    private typealias CGSGetCurrentDisplayModeFn = @convention(c) (
-        CGDirectDisplayID,
-        UnsafeMutablePointer<Int32>
-    ) -> CGError
+    private typealias CGSGetCurrentDisplayModeFn =
+        @convention(c) (
+            CGDirectDisplayID,
+            UnsafeMutablePointer<Int32>
+        ) -> CGError
 
-    private typealias CoreDisplayCreateInfoDictionaryFn = @convention(c) (
-        CGDirectDisplayID
-    ) -> Unmanaged<CFDictionary>?
+    private typealias CoreDisplayCreateInfoDictionaryFn =
+        @convention(c) (
+            CGDirectDisplayID
+        ) -> Unmanaged<CFDictionary>?
 
-    private typealias DisplayServicesCanChangeBrightnessFn = @convention(c) (
-        CGDirectDisplayID
-    ) -> Bool
+    private typealias DisplayServicesCanChangeBrightnessFn =
+        @convention(c) (
+            CGDirectDisplayID
+        ) -> Bool
 
-    private typealias DisplayServicesGetBrightnessFn = @convention(c) (
-        CGDirectDisplayID,
-        UnsafeMutablePointer<Float>
-    ) -> Int32
+    private typealias DisplayServicesGetBrightnessFn =
+        @convention(c) (
+            CGDirectDisplayID,
+            UnsafeMutablePointer<Float>
+        ) -> Int32
 
-    private typealias DisplayServicesSetBrightnessFn = @convention(c) (
-        CGDirectDisplayID,
-        Float
-    ) -> Int32
+    private typealias DisplayServicesSetBrightnessFn =
+        @convention(c) (
+            CGDirectDisplayID,
+            Float
+        ) -> Int32
 
     private let cgsGetDisplayList: CGSGetDisplayListFn?
     private let cgsConfigureDisplayEnabled: CGSConfigureDisplayEnabledFn?
@@ -331,7 +341,8 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         }
 
         if CGDisplayIsBuiltin(displayID) == 0,
-           ddcClient.writeBrightness(for: displayID, level: clamped) {
+            ddcClient.writeBrightness(for: displayID, level: clamped)
+        {
             clearSoftwareGammaIfApplied(displayID: displayID)
             return .hardwareDDC
         }
@@ -444,16 +455,18 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         }
 
         if let coreDisplayCreateInfoDictionary,
-           let unmanagedDict = coreDisplayCreateInfoDictionary(displayID),
-           let dict = unmanagedDict.takeRetainedValue() as? [String: Any],
-           let productName = DisplayNameFormatter.extractProductName(from: dict) {
+            let unmanagedDict = coreDisplayCreateInfoDictionary(displayID),
+            let dict = unmanagedDict.takeRetainedValue() as? [String: Any],
+            let productName = DisplayNameFormatter.extractProductName(from: dict)
+        {
             return productName
         }
 
         let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
         for screen in NSScreen.screens {
             if let number = screen.deviceDescription[screenNumberKey] as? NSNumber,
-               number.uint32Value == displayID {
+                number.uint32Value == displayID
+            {
                 let localized = screen.localizedName.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !localized.isEmpty {
                     return localized
@@ -497,10 +510,12 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             guard service != 0 else { break }
             defer { IOObjectRelease(service) }
 
-            guard let info = IODisplayCreateInfoDictionary(
-                service,
-                IOOptionBits(kIODisplayOnlyPreferredName)
-            )?.takeRetainedValue() as? [String: Any] else {
+            guard
+                let info = IODisplayCreateInfoDictionary(
+                    service,
+                    IOOptionBits(kIODisplayOnlyPreferredName)
+                )?.takeRetainedValue() as? [String: Any]
+            else {
                 continue
             }
 
@@ -516,8 +531,9 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 return preferredName
             }
             if let edidData = info[kIODisplayEDIDKey] as? Data,
-               let parsedName = DDCProtocol.parseEDID(edidData)?.productName?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !parsedName.isEmpty {
+                let parsedName = DDCProtocol.parseEDID(edidData)?.productName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !parsedName.isEmpty
+            {
                 return parsedName
             }
         }
@@ -536,7 +552,8 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         guard let cgsGetCurrentDisplayMode else { return nil }
         var currentModeNumber: Int32 = -1
         guard cgsGetCurrentDisplayMode(displayID, &currentModeNumber) == .success,
-              currentModeNumber >= 0 else {
+            currentModeNumber >= 0
+        else {
             return nil
         }
         if let cgsGetDisplayModeDescriptionOfLength {
@@ -561,7 +578,8 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         var cgModes = (CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode]) ?? []
         if let currentMode = CGDisplayCopyDisplayMode(displayID),
-           !cgModes.contains(where: { $0.ioDisplayModeID == currentMode.ioDisplayModeID }) {
+            !cgModes.contains(where: { $0.ioDisplayModeID == currentMode.ioDisplayModeID })
+        {
             cgModes.append(currentMode)
         }
 
@@ -602,13 +620,15 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
 
     private func fetchSkyLightDisplayModes(for displayID: CGDirectDisplayID) -> [RawDisplayMode] {
         guard let cgsGetNumberOfDisplayModes,
-              let cgsGetDisplayModeDescriptionOfLength else {
+            let cgsGetDisplayModeDescriptionOfLength
+        else {
             return []
         }
 
         var modeCount: Int32 = 0
         guard cgsGetNumberOfDisplayModes(displayID, &modeCount) == .success,
-              modeCount > 0 else {
+            modeCount > 0
+        else {
             return []
         }
 
@@ -650,8 +670,9 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         var alphanumericSerial: String?
 
         if let coreDisplayCreateInfoDictionary,
-           let unmanagedDict = coreDisplayCreateInfoDictionary(displayID),
-           let dict = unmanagedDict.takeRetainedValue() as? [String: Any] {
+            let unmanagedDict = coreDisplayCreateInfoDictionary(displayID),
+            let dict = unmanagedDict.takeRetainedValue() as? [String: Any]
+        {
             productName = DisplayNameFormatter.extractProductName(from: dict)
             weekOfManufacture = (dict["DisplayWeekManufacture"] as? NSNumber)?.intValue
             yearOfManufacture = (dict["DisplayYearManufacture"] as? NSNumber)?.intValue
@@ -668,8 +689,9 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                     kCFAllocatorDefault,
                     0
                 )?.takeRetainedValue() as? [String: Any],
-                   let productAttributes = attributes["ProductAttributes"] as? [String: Any],
-                   let alphaSerial = productAttributes["AlphanumericSerialNumber"] as? String {
+                    let productAttributes = attributes["ProductAttributes"] as? [String: Any],
+                    let alphaSerial = productAttributes["AlphanumericSerialNumber"] as? String
+                {
                     alphanumericSerial = alphaSerial
                 }
             }
@@ -698,7 +720,8 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
 
     private func readNativeAppleBacklight(_ displayID: CGDirectDisplayID) -> Double? {
         guard supportsNativeAppleBacklight(displayID),
-              let displayServicesGetBrightness else {
+            let displayServicesGetBrightness
+        else {
             return nil
         }
         var value: Float = 1.0
@@ -710,7 +733,8 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
 
     private func writeNativeAppleBacklight(_ displayID: CGDirectDisplayID, level: Double) -> Bool {
         guard supportsNativeAppleBacklight(displayID),
-              let displayServicesSetBrightness else {
+            let displayServicesSetBrightness
+        else {
             return false
         }
         return displayServicesSetBrightness(displayID, Float(level)) == 0

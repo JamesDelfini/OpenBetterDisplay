@@ -54,8 +54,9 @@ public final class DisplayCoordinator: ObservableObject {
 
     public func toggleLockReason(for displayID: UInt32) -> DisplayToggleLockReason? {
         guard let display = displays.first(where: { $0.displayID == displayID }),
-              display.isEnabled,
-              !display.canToggleOff else {
+            display.isEnabled,
+            !display.canToggleOff
+        else {
             return nil
         }
         let activeCount = displays.filter(\.isEnabled).count
@@ -81,7 +82,8 @@ public final class DisplayCoordinator: ObservableObject {
             return
         }
         guard let display = displays.first(where: { $0.displayID == displayID }),
-              display.isEnabled else {
+            display.isEnabled
+        else {
             return
         }
         expandedDisplayID = displayID
@@ -107,13 +109,15 @@ public final class DisplayCoordinator: ObservableObject {
             }
         } else {
             guard display.isEnabled, canToggleOff(displayID) else { return }
-            let rawToCache = lastKnownRawDisplays[displayID] ?? RawDisplayInfo(
-                displayID: display.displayID,
-                name: display.name,
-                isBuiltIn: display.isBuiltIn,
-                isMain: false,
-                isActive: false
-            )
+            let rawToCache =
+                lastKnownRawDisplays[displayID]
+                ?? RawDisplayInfo(
+                    displayID: display.displayID,
+                    name: display.name,
+                    isBuiltIn: display.isBuiltIn,
+                    isMain: false,
+                    isActive: false
+                )
             do {
                 try driver.setDisplayEnabled(displayID, enabled: false)
                 resetDDCThrottleState(for: displayID)
@@ -134,8 +138,9 @@ public final class DisplayCoordinator: ObservableObject {
 
     public func setMainDisplay(_ displayID: UInt32) {
         guard let target = displays.first(where: { $0.displayID == displayID }),
-              target.isEnabled,
-              !target.isMain else {
+            target.isEnabled,
+            !target.isMain
+        else {
             return
         }
         expandedDisplayID = nil
@@ -213,10 +218,11 @@ public final class DisplayCoordinator: ObservableObject {
             return lhs.displayID < rhs.displayID
         }
 
-        let currentEnabledIDs = Set(sorted.compactMap { raw -> UInt32? in
-            let isEnabled = disconnectedDisplays[raw.displayID] == nil && raw.isActive
-            return isEnabled ? raw.displayID : nil
-        })
+        let currentEnabledIDs = Set(
+            sorted.compactMap { raw -> UInt32? in
+                let isEnabled = disconnectedDisplays[raw.displayID] == nil && raw.isActive
+                return isEnabled ? raw.displayID : nil
+            })
         let removedEnabledIDs = knownEnabledDisplayIDs.subtracting(currentEnabledIDs)
         for removedID in removedEnabledIDs {
             resetDDCThrottleState(for: removedID)
@@ -319,7 +325,8 @@ public final class DisplayCoordinator: ObservableObject {
 
     public func previewResolution(_ displayID: UInt32, modeID: Int32) {
         guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
-              displays[index].isEnabled else {
+            displays[index].isEnabled
+        else {
             return
         }
         guard displays[index].availableModes.contains(where: { $0.modeID == modeID }) else {
@@ -330,7 +337,8 @@ public final class DisplayCoordinator: ObservableObject {
 
     public func previewResolution(_ displayID: UInt32, stepIndex: Int) {
         guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
-              displays[index].isEnabled else {
+            displays[index].isEnabled
+        else {
             return
         }
         let modes = displays[index].availableModes
@@ -343,7 +351,8 @@ public final class DisplayCoordinator: ObservableObject {
 
     public func commitResolution(_ displayID: UInt32, modeID: Int32? = nil) {
         guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
-              displays[index].isEnabled else {
+            displays[index].isEnabled
+        else {
             return
         }
         let targetModeID = modeID ?? displays[index].previewModeID
@@ -407,7 +416,8 @@ public final class DisplayCoordinator: ObservableObject {
         }
 
         if !knownEnabledDisplayIDs.contains(raw.displayID),
-           let savedLevel = brightnessStore.brightness(forKey: persistenceKey) {
+            let savedLevel = brightnessStore.brightness(forKey: persistenceKey)
+        {
             let clampedSaved = max(0.0, min(1.0, savedLevel))
             let backend = driver.setBrightness(raw.displayID, level: clampedSaved)
             return (clampedSaved, backend)
@@ -448,7 +458,8 @@ public final class DisplayCoordinator: ObservableObject {
 
     private func flushDDCWrite(for displayID: UInt32) {
         guard var state = ddcThrottleStates[displayID],
-              let targetLevel = state.pendingLevel else {
+            let targetLevel = state.pendingLevel
+        else {
             return
         }
         state.pendingLevel = nil
@@ -462,28 +473,31 @@ public final class DisplayCoordinator: ObservableObject {
         ddcThrottleStates[displayID] = state
 
         let driver = self.driver
-        writeScheduler.performWrite({
-            driver.setBrightness(displayID, level: targetLevel)
-        }) { [weak self] backend in
-            guard let self else { return }
-            self.ddcThrottleStates[displayID]?.inFlightLevel = nil
+        writeScheduler.performWrite(
+            {
+                driver.setBrightness(displayID, level: targetLevel)
+            },
+            completion: { [weak self] backend in
+                guard let self else { return }
+                self.ddcThrottleStates[displayID]?.inFlightLevel = nil
 
-            if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
-                self.displays[index].brightnessBackend = backend
-            }
+                if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
+                    self.displays[index].brightnessBackend = backend
+                }
 
-            if self.ddcThrottleStates[displayID]?.pendingLevel != nil {
-                if backend == .hardwareDDC, self.ddcThrottleInterval > 0 {
-                    self.scheduleOrFlushDDCWrite(for: displayID)
-                } else if let trailingLevel = self.ddcThrottleStates[displayID]?.pendingLevel {
-                    self.ddcThrottleStates[displayID]?.pendingLevel = nil
-                    let nextBackend = self.driver.setBrightness(displayID, level: trailingLevel)
-                    if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
-                        self.displays[index].brightnessBackend = nextBackend
+                if self.ddcThrottleStates[displayID]?.pendingLevel != nil {
+                    if backend == .hardwareDDC, self.ddcThrottleInterval > 0 {
+                        self.scheduleOrFlushDDCWrite(for: displayID)
+                    } else if let trailingLevel = self.ddcThrottleStates[displayID]?.pendingLevel {
+                        self.ddcThrottleStates[displayID]?.pendingLevel = nil
+                        let nextBackend = self.driver.setBrightness(displayID, level: trailingLevel)
+                        if let index = self.displays.firstIndex(where: { $0.displayID == displayID }) {
+                            self.displays[index].brightnessBackend = nextBackend
+                        }
                     }
                 }
             }
-        }
+        )
     }
 
     private func cancelPendingDDCWrite(for displayID: UInt32) {

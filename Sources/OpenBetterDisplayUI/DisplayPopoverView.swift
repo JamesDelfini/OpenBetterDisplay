@@ -75,12 +75,15 @@ public struct DisplayPopoverView: View {
 
                 Spacer()
 
-                Toggle("", isOn: Binding(
-                    get: { launchAtLogin },
-                    set: { newValue in
-                        setLaunchAtLogin(newValue)
-                    }
-                ))
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { launchAtLogin },
+                        set: { newValue in
+                            setLaunchAtLogin(newValue)
+                        }
+                    )
+                )
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
@@ -508,7 +511,8 @@ private struct HUDBrightnessSlider: View {
             onDragChanged: { fraction in
                 let nextValue = Double(fraction)
                 if nextValue != value,
-                   nextValue == 0.0 || nextValue == 1.0 || abs(nextValue - value) > 0.0005 {
+                    nextValue == 0.0 || nextValue == 1.0 || abs(nextValue - value) > 0.0005
+                {
                     value = nextValue
                 }
             }

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import OpenBetterDisplayCore
 
 @MainActor
@@ -543,7 +544,9 @@ final class DisplayCoordinatorTests: XCTestCase {
             RawDisplayMode(modeID: 203, width: 1920, height: 1200, pixelWidth: 3840, pixelHeight: 2400, refreshRate: 60.0),
             RawDisplayMode(modeID: 204, width: 1024, height: 768, pixelWidth: 1024, pixelHeight: 768, refreshRate: 60.0),
             RawDisplayMode(modeID: 104, width: 1504, height: 846, pixelWidth: 3008, pixelHeight: 1692, refreshRate: 60.0),
-            RawDisplayMode(modeID: 205, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, isUsableForDesktopGUI: false)
+            RawDisplayMode(
+                modeID: 205, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, isUsableForDesktopGUI: false
+            )
         ]
 
         let driver = FakeDisplayDriver(onlineDisplays: [
@@ -668,7 +671,8 @@ final class DisplayCoordinatorTests: XCTestCase {
         ]
 
         let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: true, currentModeID: 4, modes: builtInZeroHzModes),
+            RawDisplayInfo(
+                displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: true, currentModeID: 4, modes: builtInZeroHzModes),
             RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: false, currentModeID: 20, modes: mixedZeroHzModes)
         ])
 
@@ -838,7 +842,8 @@ final class DisplayCoordinatorTests: XCTestCase {
 
         let coordinator = DisplayCoordinator(driver: driver)
         guard let firstDisplay = coordinator.displays.first(where: { $0.displayID == 30 }),
-              let secondDisplay = coordinator.displays.first(where: { $0.displayID == 31 }) else {
+            let secondDisplay = coordinator.displays.first(where: { $0.displayID == 31 })
+        else {
             XCTFail("Expected both 4K displays")
             return
         }
@@ -932,7 +937,8 @@ final class DisplayCoordinatorTests: XCTestCase {
         ]
 
         let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: false, isActive: false, currentModeID: 101, modes: modes)
+            RawDisplayInfo(
+                displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: false, isActive: false, currentModeID: 101, modes: modes)
         ])
 
         let coordinator = DisplayCoordinator(driver: driver)
@@ -1525,7 +1531,8 @@ private final class ManualBrightnessWriteScheduler: BrightnessWriteScheduling {
     func advance(by interval: TimeInterval) {
         currentTime += max(0, interval)
         while true {
-            let ready = scheduledTokens
+            let ready =
+                scheduledTokens
                 .filter { !$0.isCancelled && $0.fireTime <= currentTime + 1e-9 }
                 .sorted { $0.fireTime < $1.fireTime }
             guard let next = ready.first else { break }

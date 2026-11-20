@@ -176,7 +176,8 @@ public enum DDCProtocol {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range = NSRange(ioDisplayLocation.startIndex..., in: ioDisplayLocation)
         guard let match = regex.firstMatch(in: ioDisplayLocation, range: range),
-              let tokenRange = Range(match.range(at: 1), in: ioDisplayLocation) else {
+            let tokenRange = Range(match.range(at: 1), in: ioDisplayLocation)
+        else {
             return nil
         }
         return String(ioDisplayLocation[tokenRange])
@@ -202,26 +203,30 @@ public enum DDCProtocol {
                 score += 200
             }
             if let targetAlpha = normalizedToken(target.alphanumericSerial),
-               let edidAlpha = normalizedToken(edid.alphanumericSerial) {
+                let edidAlpha = normalizedToken(edid.alphanumericSerial)
+            {
                 guard targetAlpha == edidAlpha else { return nil }
                 score += 200
             }
             if let targetName = normalizedToken(target.productName),
-               let edidName = normalizedToken(edid.productName),
-               targetName == edidName {
+                let edidName = normalizedToken(edid.productName),
+                targetName == edidName
+            {
                 score += 50
             }
             if let targetYear = target.yearOfManufacture,
-               let targetWeek = target.weekOfManufacture,
-               edid.yearOfManufacture == targetYear,
-               edid.weekOfManufacture == targetWeek {
+                let targetWeek = target.weekOfManufacture,
+                edid.yearOfManufacture == targetYear,
+                edid.weekOfManufacture == targetWeek
+            {
                 score += 30
             }
         }
 
         if let location = target.ioDisplayLocation,
-           let pipe = extractDisplayPipeToken(from: location),
-           registryPathMatchesPipe(candidate.registryPath, pipe: pipe) {
+            let pipe = extractDisplayPipeToken(from: location),
+            registryPathMatchesPipe(candidate.registryPath, pipe: pipe)
+        {
             score += 80
         }
 
@@ -250,7 +255,8 @@ public enum DDCProtocol {
 
     private static func normalizedToken(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else {
+            !trimmed.isEmpty
+        else {
             return nil
         }
         return trimmed.lowercased()
@@ -259,7 +265,8 @@ public enum DDCProtocol {
     private static func registryPathMatchesPipe(_ registryPath: String, pipe: String) -> Bool {
         if registryPath.contains("/\(pipe):")
             || registryPath.contains("/\(pipe)@")
-            || registryPath.contains("/\(pipe)/") {
+            || registryPath.contains("/\(pipe)/")
+        {
             return true
         }
         if pipe.hasPrefix("dispext") {

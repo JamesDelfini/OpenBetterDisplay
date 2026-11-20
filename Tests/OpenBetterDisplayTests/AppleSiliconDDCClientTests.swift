@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+
 @testable import OpenBetterDisplayCore
 
 final class AppleSiliconDDCClientTests: XCTestCase {
@@ -223,7 +224,8 @@ private final class FakeDDCTransport: DDCTransport, @unchecked Sendable {
     ) -> DDCResolvedService? {
         resolveCallCount += 1
         guard let service = servicesByDisplayID[displayID],
-              !excludingClaimedPaths.contains(service.registryPath) else {
+            !excludingClaimedPaths.contains(service.registryPath)
+        else {
             return nil
         }
         return service

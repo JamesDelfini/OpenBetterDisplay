@@ -39,12 +39,14 @@ public enum DisplayNameFormatter {
             return nil
         }
         if let enUS = productNames["en_US"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !enUS.isEmpty {
+            !enUS.isEmpty
+        {
             return enUS
         }
         if let firstName = productNames.values
             .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
-            .first(where: { !$0.isEmpty }) {
+            .first(where: { !$0.isEmpty })
+        {
             return firstName
         }
         return nil

@@ -30,7 +30,8 @@ public enum DisplayModeFilter {
         let hiDPICandidates = candidatePool.filter { $0.pixelWidth > $0.width }
         let standardCandidates = candidatePool.filter { $0.pixelWidth <= $0.width }
         let isActiveModeHiDPI = activeRawMode.map { $0.pixelWidth > $0.width } ?? false
-        let isRetinaOrHighDensityPanel = (raw.isBuiltIn && nativePixelWidth >= 2560)
+        let isRetinaOrHighDensityPanel =
+            (raw.isBuiltIn && nativePixelWidth >= 2560)
             || nativePixelWidth >= 3000
             || (isActiveModeHiDPI && hiDPICandidates.count >= 2)
 
@@ -49,7 +50,8 @@ public enum DisplayModeFilter {
                     deduplicatedByResolution[key] = mode
                 } else if existing.modeID != raw.currentModeID {
                     if mode.pixelWidth > existing.pixelWidth
-                        || (mode.pixelWidth == existing.pixelWidth && mode.refreshRate > existing.refreshRate) {
+                        || (mode.pixelWidth == existing.pixelWidth && mode.refreshRate > existing.refreshRate)
+                    {
                         deduplicatedByResolution[key] = mode
                     }
                 }
@@ -80,12 +82,14 @@ public enum DisplayModeFilter {
             return matched
         }
         guard let activeRaw = raw.modes.first(where: { $0.modeID == raw.currentModeID }),
-              activeRaw.width > 0, activeRaw.height > 0,
-              activeRaw.pixelWidth > 0, activeRaw.pixelHeight > 0 else {
+            activeRaw.width > 0, activeRaw.height > 0,
+            activeRaw.pixelWidth > 0, activeRaw.pixelHeight > 0
+        else {
             return nil
         }
         let usableModes = usableDesktopModes(from: raw.modes)
-        let nativePixelWidth = usableModes.isEmpty
+        let nativePixelWidth =
+            usableModes.isEmpty
             ? activeRaw.pixelWidth
             : resolveNativePixelDimensions(for: raw, usableModes: usableModes).0
         return makeModeOption(mode: activeRaw, nativePixelWidth: nativePixelWidth)
@@ -167,17 +171,20 @@ public enum DisplayModeFilter {
         let oneXModes = usableModes.filter { $0.pixelWidth == $0.width && $0.pixelHeight == $0.height }
         if let active = usableModes.first(where: { $0.modeID == raw.currentModeID }) {
             let activeAspect = Double(active.width) / Double(active.height)
-            let matchingActiveAspect1x = oneXModes
+            let matchingActiveAspect1x =
+                oneXModes
                 .filter { abs((Double($0.width) / Double($0.height)) - activeAspect) <= 0.025 }
                 .max(by: { ($0.width * $0.height) < ($1.width * $1.height) })
             if let matchingActiveAspect1x,
-               Double(matchingActiveAspect1x.pixelWidth) >= Double(maxLogicalWidth) * 0.90 {
+                Double(matchingActiveAspect1x.pixelWidth) >= Double(maxLogicalWidth) * 0.90
+            {
                 return (matchingActiveAspect1x.pixelWidth, matchingActiveAspect1x.pixelHeight)
             }
         }
 
         if let highest1x = oneXModes.max(by: { ($0.width * $0.height) < ($1.width * $1.height) }),
-           highest1x.pixelWidth >= maxLogicalWidth {
+            highest1x.pixelWidth >= maxLogicalWidth
+        {
             return (highest1x.pixelWidth, highest1x.pixelHeight)
         }
 

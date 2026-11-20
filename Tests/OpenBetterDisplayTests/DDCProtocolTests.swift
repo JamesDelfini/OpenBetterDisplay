@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+
 @testable import OpenBetterDisplayCore
 
 final class DDCProtocolTests: XCTestCase {
@@ -135,15 +136,18 @@ final class DDCProtocolTests: XCTestCase {
         )
 
         let matchingCandidate = DDCProtocol.DDCServiceCandidate(
-            registryPath: "IOService:/AppleARMPE/arm-io@10F00000/AppleH16GFamilyIO/dcpext0@A2E00000/dispext0:dcpav-service-epic:0/DCPAVServiceProxy",
+            registryPath:
+                "IOService:/AppleARMPE/arm-io@10F00000/AppleH16GFamilyIO/dcpext0@A2E00000/dispext0:dcpav-service-epic:0/DCPAVServiceProxy",
             edid: parsed
         )
         let wrongPipeCandidate = DDCProtocol.DDCServiceCandidate(
-            registryPath: "IOService:/AppleARMPE/arm-io@10F00000/AppleH16GFamilyIO/dcpext1@A2E00000/dispext1:dcpav-service-epic:0/DCPAVServiceProxy",
+            registryPath:
+                "IOService:/AppleARMPE/arm-io@10F00000/AppleH16GFamilyIO/dcpext1@A2E00000/dispext1:dcpav-service-epic:0/DCPAVServiceProxy",
             edid: parsed
         )
         let differentMonitorCandidate = DDCProtocol.DDCServiceCandidate(
-            registryPath: "IOService:/AppleARMPE/arm-io@10F00000/AppleH16GFamilyIO/dcpext1@A2E00000/dispext1:dcpav-service-epic:0/DCPAVServiceProxy",
+            registryPath:
+                "IOService:/AppleARMPE/arm-io@10F00000/AppleH16GFamilyIO/dcpext1@A2E00000/dispext1:dcpav-service-epic:0/DCPAVServiceProxy",
             edid: DDCProtocol.ParsedEDID(
                 vendorID: 0x10AC,
                 modelID: 0xD0B3,

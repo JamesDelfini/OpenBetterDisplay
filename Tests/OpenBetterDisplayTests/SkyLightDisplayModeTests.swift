@@ -1,21 +1,22 @@
 import Foundation
 import XCTest
+
 @testable import OpenBetterDisplayCore
 
 final class SkyLightDisplayModeTests: XCTestCase {
     func testParsesSkyLightHiDPIModeDescriptionWithFixedPointRefreshRateAndNativeFlag() {
         var bytes = [UInt8](repeating: 0, count: Int(SkyLightDisplayModeDescription.byteLength))
-        writeInt32LE(54, into: &bytes, offset: 0x00)          // modeNumber
+        writeInt32LE(54, into: &bytes, offset: 0x00) // modeNumber
         writeUInt32LE(0x0200_0007, into: &bytes, offset: 0x04) // flags (native + valid + safe + default)
-        writeUInt32LE(1512, into: &bytes, offset: 0x08)        // width
-        writeUInt32LE(982, into: &bytes, offset: 0x0C)         // height
-        writeUInt32LE(8, into: &bytes, offset: 0x10)           // depth
-        writeUInt32LE(120, into: &bytes, offset: 0x24)         // integer freq
-        writeUInt32LE(120 << 16, into: &bytes, offset: 0xBC)   // fixed 16.16 Hz = 120.0
+        writeUInt32LE(1512, into: &bytes, offset: 0x08) // width
+        writeUInt32LE(982, into: &bytes, offset: 0x0C) // height
+        writeUInt32LE(8, into: &bytes, offset: 0x10) // depth
+        writeUInt32LE(120, into: &bytes, offset: 0x24) // integer freq
+        writeUInt32LE(120 << 16, into: &bytes, offset: 0xBC) // fixed 16.16 Hz = 120.0
         writeUInt32LE(0x0200_0007, into: &bytes, offset: 0xC0) // ioFlags
-        writeInt32LE(54, into: &bytes, offset: 0xC4)           // ioDisplayModeID
-        writeUInt32LE(3024, into: &bytes, offset: 0xC8)        // pixelsWide
-        writeUInt32LE(1964, into: &bytes, offset: 0xCC)        // pixelsHigh
+        writeInt32LE(54, into: &bytes, offset: 0xC4) // ioDisplayModeID
+        writeUInt32LE(3024, into: &bytes, offset: 0xC8) // pixelsWide
+        writeUInt32LE(1964, into: &bytes, offset: 0xCC) // pixelsHigh
         writeUInt32LE(Float(2.0).bitPattern, into: &bytes, offset: 0xD0)
 
         let parsed = SkyLightDisplayModeDescription.parse(bytes: bytes)

@@ -1,5 +1,6 @@
 import AppKit
 import OpenBetterDisplayCore
+import OpenBetterDisplayUI
 import SwiftUI
 
 @MainActor

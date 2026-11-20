@@ -10,13 +10,15 @@ CONTENTS_DIR="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
-export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/tmp/clang-module-cache}"
-export SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-/tmp/swift-module-cache}"
+WORKTREE_ID="$(basename "${ROOT_DIR}")"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/tmp/obd-${WORKTREE_ID}-clang}"
+export SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-/tmp/obd-${WORKTREE_ID}-swift}"
 
 echo "==> Building ${APP_NAME} (${CONFIGURATION})..."
 swift build \
     --disable-sandbox \
     --package-path "${ROOT_DIR}" \
+    --product "${APP_NAME}" \
     -c "${CONFIGURATION}" \
     -Xswiftc -module-cache-path \
     -Xswiftc "${SWIFTPM_MODULECACHE_OVERRIDE}"
@@ -24,6 +26,7 @@ swift build \
 BIN_PATH="$(swift build \
     --disable-sandbox \
     --package-path "${ROOT_DIR}" \
+    --product "${APP_NAME}" \
     -c "${CONFIGURATION}" \
     --show-bin-path)/${APP_NAME}"
 

@@ -164,7 +164,8 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
 
     public var activeOrPreviewMode: DisplayModeOption? {
         if let previewModeID,
-           let preview = availableModes.first(where: { $0.modeID == previewModeID }) {
+            let preview = availableModes.first(where: { $0.modeID == previewModeID })
+        {
             return preview
         }
         if let current = availableModes.first(where: { $0.modeID == currentModeID }) {
@@ -181,7 +182,8 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
             return nil
         }
         if let previewModeID,
-           let previewIndex = availableModes.firstIndex(where: { $0.modeID == previewModeID }) {
+            let previewIndex = availableModes.firstIndex(where: { $0.modeID == previewModeID })
+        {
             return previewIndex
         }
         if let currentIndex = availableModes.firstIndex(where: { $0.modeID == currentModeID }) {

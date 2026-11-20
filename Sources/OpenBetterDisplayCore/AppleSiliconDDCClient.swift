@@ -121,7 +121,8 @@ public final class AppleSiliconDDCClient: @unchecked Sendable {
         let claimedPaths = claimedRegistryPathsLocked(excluding: displayID)
         if let fresh = transport.resolveService(for: displayID, excludingClaimedPaths: claimedPaths) {
             if fresh.registryPath != resolved.service.registryPath,
-               transport.writeLuminance(to: fresh.handle, level: level, maxValue: Self.defaultMaxValue) {
+                transport.writeLuminance(to: fresh.handle, level: level, maxValue: Self.defaultMaxValue)
+            {
                 states[displayID] = .serviceAvailable(
                     service: fresh,
                     maxValue: nil,
@@ -149,8 +150,9 @@ public final class AppleSiliconDDCClient: @unchecked Sendable {
 
         let currentTime = now()
         guard let resolved = resolveOrGetServiceLocked(for: displayID, currentTime: currentTime),
-              let name = resolved.service.edid?.productName?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !name.isEmpty else {
+            let name = resolved.service.edid?.productName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !name.isEmpty
+        else {
             return nil
         }
         return name
@@ -209,48 +211,54 @@ public final class AppleSiliconDDCClient: @unchecked Sendable {
     }
 
     private func claimedRegistryPathsLocked(excluding displayID: UInt32) -> Set<String> {
-        Set(states.compactMap { entryDisplayID, state in
-            guard entryDisplayID != displayID else { return nil }
-            if case .serviceAvailable(let service, _, _, _) = state {
-                return service.registryPath
-            }
-            return nil
-        })
+        Set(
+            states.compactMap { entryDisplayID, state in
+                guard entryDisplayID != displayID else { return nil }
+                if case .serviceAvailable(let service, _, _, _) = state {
+                    return service.registryPath
+                }
+                return nil
+            })
     }
 }
 
 internal final class IOAVServiceDDCTransport: DDCTransport, @unchecked Sendable {
     private static let ioAVServiceLocationEmbedded: UInt32 = 1
 
-    private typealias IOAVServiceCreateWithServiceFn = @convention(c) (
-        CFAllocator?,
-        io_service_t
-    ) -> Unmanaged<CFTypeRef>?
+    private typealias IOAVServiceCreateWithServiceFn =
+        @convention(c) (
+            CFAllocator?,
+            io_service_t
+        ) -> Unmanaged<CFTypeRef>?
 
-    private typealias IOAVServiceReadI2CFn = @convention(c) (
-        CFTypeRef,
-        UInt32,
-        UInt32,
-        UnsafeMutableRawPointer,
-        UInt32
-    ) -> IOReturn
+    private typealias IOAVServiceReadI2CFn =
+        @convention(c) (
+            CFTypeRef,
+            UInt32,
+            UInt32,
+            UnsafeMutableRawPointer,
+            UInt32
+        ) -> IOReturn
 
-    private typealias IOAVServiceWriteI2CFn = @convention(c) (
-        CFTypeRef,
-        UInt32,
-        UInt32,
-        UnsafeRawPointer,
-        UInt32
-    ) -> IOReturn
+    private typealias IOAVServiceWriteI2CFn =
+        @convention(c) (
+            CFTypeRef,
+            UInt32,
+            UInt32,
+            UnsafeRawPointer,
+            UInt32
+        ) -> IOReturn
 
-    private typealias IOAVServiceCopyEDIDFn = @convention(c) (
-        CFTypeRef,
-        UnsafeMutablePointer<Unmanaged<CFData>?>
-    ) -> IOReturn
+    private typealias IOAVServiceCopyEDIDFn =
+        @convention(c) (
+            CFTypeRef,
+            UnsafeMutablePointer<Unmanaged<CFData>?>
+        ) -> IOReturn
 
-    private typealias IOAVServiceGetLocationFn = @convention(c) (
-        CFTypeRef
-    ) -> UInt32
+    private typealias IOAVServiceGetLocationFn =
+        @convention(c) (
+            CFTypeRef
+        ) -> UInt32
 
     private let ioAVServiceCreateWithService: IOAVServiceCreateWithServiceFn?
     private let ioAVServiceReadI2C: IOAVServiceReadI2CFn?
@@ -281,7 +289,8 @@ internal final class IOAVServiceDDCTransport: DDCTransport, @unchecked Sendable 
         excludingClaimedPaths claimedPaths: Set<String>
     ) -> DDCResolvedService? {
         guard CGDisplayIsBuiltin(displayID) == 0,
-              let ioAVServiceCreateWithService else {
+            let ioAVServiceCreateWithService
+        else {
             return nil
         }
 
@@ -305,7 +314,8 @@ internal final class IOAVServiceDDCTransport: DDCTransport, @unchecked Sendable 
             defer { IOObjectRelease(service) }
 
             if let location = readStringProperty("Location", from: service),
-               location == "Embedded" {
+                location == "Embedded"
+            {
                 continue
             }
 
@@ -315,7 +325,8 @@ internal final class IOAVServiceDDCTransport: DDCTransport, @unchecked Sendable 
             let avService: CFTypeRef = unmanagedAVService.takeRetainedValue()
 
             if let ioAVServiceGetLocation,
-               ioAVServiceGetLocation(avService) == Self.ioAVServiceLocationEmbedded {
+                ioAVServiceGetLocation(avService) == Self.ioAVServiceLocationEmbedded
+            {
                 continue
             }
 
@@ -324,7 +335,8 @@ internal final class IOAVServiceDDCTransport: DDCTransport, @unchecked Sendable 
             if let ioAVServiceCopyEDID {
                 var unmanagedEDID: Unmanaged<CFData>?
                 if ioAVServiceCopyEDID(avService, &unmanagedEDID) == kIOReturnSuccess,
-                   let edidData = unmanagedEDID?.takeRetainedValue() as Data? {
+                    let edidData = unmanagedEDID?.takeRetainedValue() as Data?
+                {
                     parsedEDID = DDCProtocol.parseEDID(edidData)
                 }
             }
@@ -399,7 +411,8 @@ internal final class IOAVServiceDDCTransport: DDCTransport, @unchecked Sendable 
                 UInt32(reply.count)
             )
             if readStatus == kIOReturnSuccess,
-               let parsed = DDCProtocol.parseLuminanceReply(reply) {
+                let parsed = DDCProtocol.parseLuminanceReply(reply)
+            {
                 return parsed
             }
 

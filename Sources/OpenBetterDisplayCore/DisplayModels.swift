@@ -120,12 +120,27 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum DisplayToggleLockReason: Equatable, Sendable {
+    case mainDisplay
+    case lastActiveDisplay
+
+    public var tooltip: String {
+        switch self {
+        case .mainDisplay:
+            return "Cannot turn off the Main Display. Set another display as Main first."
+        case .lastActiveDisplay:
+            return "Cannot turn off the last remaining active display."
+        }
+    }
+}
+
 public struct DisplayState: Equatable, Identifiable, Sendable {
     public var displayID: UInt32
     public var name: String
     public var isBuiltIn: Bool
     public var isMain: Bool
     public var isEnabled: Bool
+    public var canToggleOff: Bool
     public var symbolName: String
     public var brightness: Double
     public var brightnessBackend: BrightnessBackendUsed
@@ -134,6 +149,10 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
     public var previewModeID: Int32?
 
     public var id: UInt32 { displayID }
+
+    public var canSetAsMain: Bool {
+        isEnabled && !isMain
+    }
 
     public var brightnessPercentage: Int {
         Int((brightness * 100.0).rounded())
@@ -167,6 +186,7 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         isBuiltIn: Bool = false,
         isMain: Bool = false,
         isEnabled: Bool = true,
+        canToggleOff: Bool = false,
         symbolName: String = "",
         brightness: Double = 1.0,
         brightnessBackend: BrightnessBackendUsed = .hardwareDDC,
@@ -179,6 +199,7 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         self.isBuiltIn = isBuiltIn
         self.isMain = isMain
         self.isEnabled = isEnabled
+        self.canToggleOff = canToggleOff
         self.symbolName = symbolName
         self.brightness = brightness
         self.brightnessBackend = brightnessBackend

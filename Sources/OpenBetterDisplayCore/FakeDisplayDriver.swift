@@ -9,6 +9,9 @@ public final class FakeDisplayDriver: DisplayDriver, @unchecked Sendable {
     public var setModeHistory: [(displayID: UInt32, modeID: Int32)] = []
     public var setDisplayModeError: Error?
     public var didResetSoftwareGamma: Bool = false
+    public var failingEnableDisplayIDs: Set<UInt32> = []
+
+    private var disconnectedDisplays: [UInt32: RawDisplayInfo] = [:]
 
     public init(
         onlineDisplays: [RawDisplayInfo] = [],
@@ -24,10 +27,36 @@ public final class FakeDisplayDriver: DisplayDriver, @unchecked Sendable {
 
     public func setDisplayEnabled(_ displayID: UInt32, enabled: Bool) throws {
         enabledHistory.append((displayID: displayID, enabled: enabled))
+        if failingEnableDisplayIDs.contains(displayID) {
+            throw DisplayDriverError.configurationFailed(-1)
+        }
+        if enabled {
+            if var restored = disconnectedDisplays.removeValue(forKey: displayID) {
+                restored.isActive = true
+                if onlineDisplays.contains(where: \.isMain) {
+                    restored.isMain = false
+                }
+                if !onlineDisplays.contains(where: { $0.displayID == displayID }) {
+                    onlineDisplays.append(restored)
+                }
+            } else if let index = onlineDisplays.firstIndex(where: { $0.displayID == displayID }) {
+                onlineDisplays[index].isActive = true
+            }
+        } else {
+            if let index = onlineDisplays.firstIndex(where: { $0.displayID == displayID }) {
+                var removed = onlineDisplays.remove(at: index)
+                removed.isActive = false
+                removed.isMain = false
+                disconnectedDisplays[displayID] = removed
+            }
+        }
     }
 
     public func setMainDisplay(_ displayID: UInt32) throws {
         mainDisplayHistory.append(displayID)
+        for index in onlineDisplays.indices {
+            onlineDisplays[index].isMain = (onlineDisplays[index].displayID == displayID)
+        }
     }
 
     public func getBrightness(_ displayID: UInt32) -> BrightnessReading {

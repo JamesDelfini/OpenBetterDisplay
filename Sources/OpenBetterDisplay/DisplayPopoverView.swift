@@ -55,6 +55,13 @@ public struct DisplayPopoverView: View {
 
     private var footerSection: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if coordinator.hasDisconnectedDisplays {
+                ReconnectAllDisplaysButton {
+                    coordinator.reconnectAllDisplays()
+                }
+                .padding(.bottom, 4)
+            }
+
             HStack(spacing: 10) {
                 ZStack {
                     Circle()
@@ -138,30 +145,61 @@ public struct DisplayCardView: View {
             headerPill
 
             if display.isEnabled {
-                ResolutionControlRow(display: display, coordinator: coordinator)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 4)
+                displayControls
             }
         }
+    }
+
+    @ViewBuilder
+    private var displayControls: some View {
+        ResolutionControlRow(display: display, coordinator: coordinator)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 4)
+    }
+
+    private var toggleLockReason: DisplayToggleLockReason? {
+        coordinator.toggleLockReason(for: display.displayID)
+    }
+
+    private var toggleTooltip: String {
+        if let lockReason = toggleLockReason {
+            return lockReason.tooltip
+        }
+        return display.isEnabled
+            ? "Turn off \(display.name)"
+            : "Turn on \(display.name)"
     }
 
     private var headerPill: some View {
         HStack(spacing: 9) {
             Image(systemName: display.symbolName)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white.opacity(0.92))
+                .foregroundStyle(.white.opacity(display.isEnabled ? 0.92 : 0.45))
                 .frame(width: 20, alignment: .center)
 
             Text(display.name)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white.opacity(0.95))
+                .foregroundStyle(.white.opacity(display.isEnabled ? 0.95 : 0.50))
                 .lineLimit(1)
 
             if display.isMain {
                 MainDisplayBadge()
+            } else if display.canSetAsMain {
+                SetMainDisplayButton(displayName: display.name) {
+                    coordinator.setMainDisplay(display.displayID)
+                }
             }
 
             Spacer(minLength: 8)
+
+            DisplayPowerToggle(
+                isOn: display.isEnabled,
+                isDisabled: toggleLockReason != nil,
+                tooltip: toggleTooltip,
+                accessibilityLabel: "\(display.name) power"
+            ) {
+                coordinator.toggleDisplayEnabled(display.displayID)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
@@ -169,17 +207,25 @@ public struct DisplayCardView: View {
             Capsule(style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.17),
-                            Color.white.opacity(0.10)
-                        ],
+                        colors: display.isEnabled
+                            ? [
+                                Color.white.opacity(0.17),
+                                Color.white.opacity(0.10)
+                            ]
+                            : [
+                                Color.white.opacity(0.08),
+                                Color.white.opacity(0.05)
+                            ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
                 .overlay(
                     Capsule(style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                        .strokeBorder(
+                            Color.white.opacity(display.isEnabled ? 0.14 : 0.08),
+                            lineWidth: 0.8
+                        )
                 )
         )
     }
@@ -378,5 +424,145 @@ public struct MainDisplayBadge: View {
                     .fill(Color.white.opacity(0.62))
             )
             .help("Main Display")
+    }
+}
+
+public struct SetMainDisplayButton: View {
+    let displayName: String
+    let action: () -> Void
+    @State private var isHovering = false
+
+    public init(displayName: String, action: @escaping () -> Void) {
+        self.displayName = displayName
+        self.action = action
+    }
+
+    public var body: some View {
+        Button(action: action) {
+            Text("M")
+                .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(isHovering ? 0.95 : 0.55))
+                .frame(width: 16, height: 16)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(isHovering ? 0.22 : 0.06))
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(
+                            Color.white.opacity(isHovering ? 0.65 : 0.28),
+                            lineWidth: 0.9
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .help("Set as Main Display")
+        .accessibilityLabel("Set \(displayName) as Main Display")
+    }
+}
+
+public struct DisplayPowerToggle: View {
+    let isOn: Bool
+    let isDisabled: Bool
+    let tooltip: String
+    let accessibilityLabel: String
+    let onToggle: () -> Void
+
+    public init(
+        isOn: Bool,
+        isDisabled: Bool,
+        tooltip: String,
+        accessibilityLabel: String,
+        onToggle: @escaping () -> Void
+    ) {
+        self.isOn = isOn
+        self.isDisabled = isDisabled
+        self.tooltip = tooltip
+        self.accessibilityLabel = accessibilityLabel
+        self.onToggle = onToggle
+    }
+
+    public var body: some View {
+        ZStack {
+            Button(action: onToggle) {
+                ZStack(alignment: isOn ? .trailing : .leading) {
+                    Capsule(style: .continuous)
+                        .fill(trackColor)
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.white.opacity(isDisabled ? 0.08 : 0.16), lineWidth: 0.7)
+                        )
+                        .frame(width: 38, height: 20)
+
+                    Capsule(style: .continuous)
+                        .fill(thumbColor)
+                        .shadow(color: .black.opacity(0.28), radius: 1.5, y: 0.8)
+                        .frame(width: 20, height: 16)
+                        .padding(2)
+                }
+                .animation(.easeInOut(duration: 0.16), value: isOn)
+                .opacity(isDisabled ? 0.45 : 1.0)
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isDisabled)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(isOn ? "On" : "Off")
+        }
+        .help(tooltip)
+    }
+
+    private var trackColor: Color {
+        if isOn {
+            return isDisabled
+                ? Color(red: 0.25, green: 0.30, blue: 0.40)
+                : Color(red: 0.23, green: 0.35, blue: 0.56)
+        }
+        return Color.white.opacity(0.10)
+    }
+
+    private var thumbColor: Color {
+        isOn ? Color.white.opacity(0.84) : Color.white.opacity(0.62)
+    }
+}
+
+public struct ReconnectAllDisplaysButton: View {
+    let action: () -> Void
+    @State private var isHovering = false
+
+    public init(action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    public var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Reconnect All Displays")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            .foregroundStyle(.white.opacity(0.95))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.accentColor.opacity(isHovering ? 0.38 : 0.26))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.accentColor.opacity(0.48), lineWidth: 0.8)
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .help("Re-enable every display that is currently turned off")
     }
 }

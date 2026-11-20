@@ -1384,7 +1384,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.expandedDisplayID)
     }
 
-    func testDisclosureDrawerStaysExpandedAfterSetAsMainDisplayAndCollapsesOnDisconnectOrUnplug() {
+    func testSettingMainDisplayRequestsPopoverCloseBeforeCallingDriverAndCollapsesDrawer() {
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
             RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: false),
@@ -1392,24 +1392,53 @@ final class DisplayCoordinatorTests: XCTestCase {
         ])
 
         let coordinator = DisplayCoordinator(driver: driver)
+        var closeRequestsBeforeDriverCall = 0
+        var totalCloseRequests = 0
+        coordinator.onRequestPopoverClose = {
+            totalCloseRequests += 1
+            if driver.mainDisplayHistory.isEmpty {
+                closeRequestsBeforeDriverCall += 1
+            }
+        }
+
         coordinator.toggleExpandedDisplay(20)
         XCTAssertEqual(coordinator.expandedDisplayID, 20)
 
-        // Setting DELL P2217H as Main Display keeps its drawer expanded in place
+        // Setting DELL P2217H as Main Display must close the popover before driver.setMainDisplay runs
         coordinator.setMainDisplay(20)
-        XCTAssertEqual(coordinator.expandedDisplayID, 20)
+        XCTAssertEqual(totalCloseRequests, 1)
+        XCTAssertEqual(closeRequestsBeforeDriverCall, 1)
+        XCTAssertNil(coordinator.expandedDisplayID)
+        XCTAssertEqual(driver.mainDisplayHistory, [20])
         XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 20 })?.isMain, true)
         XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.isMain, false)
 
-        // Expanding DELL U2725QE then turning it off auto-collapses the drawer
-        coordinator.toggleExpandedDisplay(30)
-        XCTAssertEqual(coordinator.expandedDisplayID, 30)
+        // No-op Main Display calls (already Main or Disconnected Display) must not request closing popover
+        coordinator.setMainDisplay(20)
         coordinator.setDisplayEnabled(30, enabled: false)
-        XCTAssertNil(coordinator.expandedDisplayID)
+        coordinator.setMainDisplay(30)
+        coordinator.setDisplayEnabled(30, enabled: true)
+        XCTAssertEqual(totalCloseRequests, 1)
+    }
 
-        // Expanding DELL P2217H then physically unplugging it auto-collapses the drawer
+    func testDisclosureDrawerCollapsesOnDisconnectOrUnplug() {
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
+            RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: false),
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true)
+        ])
+
+        let coordinator = DisplayCoordinator(driver: driver)
+
+        // Expanding DELL P2217H then turning it off auto-collapses the drawer
         coordinator.toggleExpandedDisplay(20)
         XCTAssertEqual(coordinator.expandedDisplayID, 20)
+        coordinator.setDisplayEnabled(20, enabled: false)
+        XCTAssertNil(coordinator.expandedDisplayID)
+
+        // Expanding DELL U2725QE then physically unplugging it auto-collapses the drawer
+        coordinator.toggleExpandedDisplay(30)
+        XCTAssertEqual(coordinator.expandedDisplayID, 30)
         driver.onlineDisplays = [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: true)
         ]

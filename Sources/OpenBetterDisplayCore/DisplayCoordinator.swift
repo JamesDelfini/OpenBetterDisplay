@@ -5,6 +5,7 @@ import Foundation
 public final class DisplayCoordinator: ObservableObject {
     @Published public private(set) var displays: [DisplayState] = []
     @Published public private(set) var expandedDisplayID: UInt32?
+    public var onRequestPopoverClose: (@MainActor () -> Void)?
 
     private struct DDCThrottleState {
         var pendingLevel: Double?
@@ -137,6 +138,8 @@ public final class DisplayCoordinator: ObservableObject {
               !target.isMain else {
             return
         }
+        expandedDisplayID = nil
+        onRequestPopoverClose?()
         do {
             try driver.setMainDisplay(displayID)
             for id in disconnectedDisplays.keys {

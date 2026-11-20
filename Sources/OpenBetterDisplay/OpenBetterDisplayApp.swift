@@ -88,6 +88,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         let driver = MacOSDisplayDriver()
         let coordinator = DisplayCoordinator(driver: driver)
+        coordinator.onRequestPopoverClose = { [weak self] in
+            self?.closePopoverImmediately()
+        }
         self.coordinator = coordinator
 
         self.reconfigurationObserver = DisplayReconfigurationObserver { [weak self] in
@@ -168,6 +171,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func closePopover(_ sender: Any?) {
         popover.performClose(sender)
+        handlePopoverClosed()
+    }
+
+    private func closePopoverImmediately() {
+        guard popover.isShown else {
+            handlePopoverClosed()
+            return
+        }
+        let previousAnimates = popover.animates
+        popover.animates = false
+        popover.close()
+        popover.animates = previousAnimates
         handlePopoverClosed()
     }
 

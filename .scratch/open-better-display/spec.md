@@ -109,7 +109,7 @@ The system is divided into three layers with a single primary seam (`DisplayDriv
   - **Controls Area (visible on Enabled Displays)**:
     - `Brightness` header row with current `<N>%` and horizontal slider with sun icon (`sun.max.fill`).
     - `Resolution` header row with clickable `<Width>x<Height>` (or `<Width>x<Height> · <Scale>%`) menu trigger and stepped horizontal slider with resolution icon (`arrow.up.left.and.arrow.down.right`).
-    - Collapsible single-open accordion disclosure chevron (`⌄` / `⌃`, collapsed by default; auto-collapses on disconnect, unplug, or popover close, stays open in place when `Set as Main Display` is clicked) revealing a footer-styled Main Display row: dimmed `Ⓜ` icon + clickable `"Set as Main Display"` on non-main Enabled Displays, and bright active `Ⓜ` icon + non-interactive `"Main Display"` on the current Main Display.
+    - Collapsible single-open accordion disclosure chevron (`⌄` / `⌃`, collapsed by default; auto-collapses on disconnect, unplug, or popover close; clicking `Set as Main Display` immediately closes the popover before transferring the Main Display) revealing a footer-styled Main Display row: dimmed `Ⓜ` icon + clickable `"Set as Main Display"` on non-main Enabled Displays, and bright active `Ⓜ` icon + non-interactive `"Main Display"` on the current Main Display.
 - **Footer Section**:
   - Shows a prominent `Reconnect All Displays` button whenever any display is currently toggled OFF.
   - Includes `Launch at Login` toggle (`SMAppService.mainApp`) and `Quit OpenBetterDisplay` action.

@@ -21,6 +21,8 @@ public enum DisplayDriverError: Error, LocalizedError, Equatable {
 }
 
 public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
+    private static let displayModeNativeFlag: UInt32 = 0x0200_0000
+
     private typealias CGSGetDisplayListFn = @convention(c) (
         UInt32,
         UnsafeMutablePointer<CGDirectDisplayID>?,
@@ -31,6 +33,12 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         CGDisplayConfigRef?,
         CGDirectDisplayID,
         Bool
+    ) -> CGError
+
+    private typealias CGSConfigureDisplayModeFn = @convention(c) (
+        CGDisplayConfigRef?,
+        CGDirectDisplayID,
+        Int32
     ) -> CGError
 
     private typealias CoreDisplayCreateInfoDictionaryFn = @convention(c) (
@@ -57,6 +65,7 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
 
     private let cgsGetDisplayList: CGSGetDisplayListFn?
     private let cgsConfigureDisplayEnabled: CGSConfigureDisplayEnabledFn?
+    private let cgsConfigureDisplayMode: CGSConfigureDisplayModeFn?
     private let coreDisplayCreateInfoDictionary: CoreDisplayCreateInfoDictionaryFn?
     private let displayServicesCanChangeBrightness: DisplayServicesCanChangeBrightnessFn?
     private let displayServicesGetBrightness: DisplayServicesGetBrightnessFn?
@@ -76,9 +85,15 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             } else {
                 self.cgsConfigureDisplayEnabled = nil
             }
+            if let sym = dlsym(skyLight, "CGSConfigureDisplayMode") {
+                self.cgsConfigureDisplayMode = unsafeBitCast(sym, to: CGSConfigureDisplayModeFn.self)
+            } else {
+                self.cgsConfigureDisplayMode = nil
+            }
         } else {
             self.cgsGetDisplayList = nil
             self.cgsConfigureDisplayEnabled = nil
+            self.cgsConfigureDisplayMode = nil
         }
 
         let coreDisplay = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY)
@@ -242,19 +257,34 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
     public func setDisplayMode(_ displayID: UInt32, modeID: Int32) throws {
         let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         let modes = (CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode]) ?? []
-        guard let targetMode = modes.first(where: { $0.ioDisplayModeID == modeID }) else {
+        let targetMode = modes.first(where: { $0.ioDisplayModeID == modeID })
+
+        guard targetMode != nil || cgsConfigureDisplayMode != nil else {
             throw DisplayDriverError.modeNotFound(modeID)
         }
+
         var configRef: CGDisplayConfigRef?
         let beginErr = CGBeginDisplayConfiguration(&configRef)
         guard beginErr == .success, let configRef else {
             throw DisplayDriverError.configurationFailed(beginErr.rawValue)
         }
-        let configErr = CGConfigureDisplayWithDisplayMode(configRef, displayID, targetMode, nil)
+
+        var configErr: CGError = .failure
+        if let targetMode {
+            configErr = CGConfigureDisplayWithDisplayMode(configRef, displayID, targetMode, nil)
+        }
+        if configErr != .success, let cgsConfigureDisplayMode {
+            configErr = cgsConfigureDisplayMode(configRef, displayID, modeID)
+        }
+
         guard configErr == .success else {
             CGCancelDisplayConfiguration(configRef)
+            if targetMode == nil {
+                throw DisplayDriverError.modeNotFound(modeID)
+            }
             throw DisplayDriverError.configurationFailed(configErr.rawValue)
         }
+
         let completeErr = CGCompleteDisplayConfiguration(configRef, .forSession)
         guard completeErr == .success else {
             throw DisplayDriverError.configurationFailed(completeErr.rawValue)
@@ -343,8 +373,10 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
 
     private func fetchDisplayModes(for displayID: CGDirectDisplayID) -> [RawDisplayMode] {
         let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
-        guard let cgModes = CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode] else {
-            return []
+        var cgModes = (CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode]) ?? []
+        if let currentMode = CGDisplayCopyDisplayMode(displayID),
+           !cgModes.contains(where: { $0.ioDisplayModeID == currentMode.ioDisplayModeID }) {
+            cgModes.append(currentMode)
         }
         return cgModes.map { mode in
             RawDisplayMode(
@@ -354,7 +386,8 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 pixelWidth: mode.pixelWidth,
                 pixelHeight: mode.pixelHeight,
                 refreshRate: mode.refreshRate,
-                isUsableForDesktopGUI: mode.isUsableForDesktopGUI()
+                isUsableForDesktopGUI: mode.isUsableForDesktopGUI(),
+                isNative: (mode.ioFlags & Self.displayModeNativeFlag) != 0
             )
         }
     }

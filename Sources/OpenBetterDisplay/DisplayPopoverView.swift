@@ -55,6 +55,13 @@ public struct DisplayPopoverView: View {
 
     private var footerSection: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if coordinator.hasDisconnectedDisplays {
+                ReconnectAllDisplaysButton {
+                    coordinator.reconnectAllDisplays()
+                }
+                .padding(.bottom, 4)
+            }
+
             HStack(spacing: 10) {
                 ZStack {
                     Circle()
@@ -138,32 +145,119 @@ public struct DisplayCardView: View {
             headerPill
 
             if display.isEnabled {
-                brightnessSection
-                    .padding(.horizontal, 8)
+                displayControls
             }
         }
     }
 
-    private var brightnessSection: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Brightness")
-                    .font(.system(size: 12.5, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.72))
+    @ViewBuilder
+    private var displayControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            BrightnessControlRow(display: display, coordinator: coordinator)
+            ResolutionControlRow(display: display, coordinator: coordinator)
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 4)
+    }
 
-                Spacer()
+    private var toggleLockReason: DisplayToggleLockReason? {
+        coordinator.toggleLockReason(for: display.displayID)
+    }
+
+    private var toggleTooltip: String {
+        if let lockReason = toggleLockReason {
+            return lockReason.tooltip
+        }
+        return display.isEnabled
+            ? "Turn off \(display.name)"
+            : "Turn on \(display.name)"
+    }
+
+    private var headerPill: some View {
+        HStack(spacing: 9) {
+            Image(systemName: display.symbolName)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white.opacity(display.isEnabled ? 0.92 : 0.45))
+                .frame(width: 20, alignment: .center)
+
+            Text(display.name)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white.opacity(display.isEnabled ? 0.95 : 0.50))
+                .lineLimit(1)
+
+            if display.isMain {
+                MainDisplayBadge()
+            } else if display.canSetAsMain {
+                SetMainDisplayButton(displayName: display.name) {
+                    coordinator.setMainDisplay(display.displayID)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            DisplayPowerToggle(
+                isOn: display.isEnabled,
+                isDisabled: toggleLockReason != nil,
+                tooltip: toggleTooltip,
+                accessibilityLabel: "\(display.name) power"
+            ) {
+                coordinator.toggleDisplayEnabled(display.displayID)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            Capsule(style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: display.isEnabled
+                            ? [
+                                Color.white.opacity(0.17),
+                                Color.white.opacity(0.10)
+                            ]
+                            : [
+                                Color.white.opacity(0.08),
+                                Color.white.opacity(0.05)
+                            ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(
+                            Color.white.opacity(display.isEnabled ? 0.14 : 0.08),
+                            lineWidth: 0.8
+                        )
+                )
+        )
+    }
+}
+
+public struct BrightnessControlRow: View {
+    let display: DisplayState
+    @ObservedObject var coordinator: DisplayCoordinator
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Brightness")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.68))
+
+                Spacer(minLength: 8)
 
                 Text("\(display.brightnessPercentage)%")
-                    .font(.system(size: 12.5, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.78))
+                    .font(.system(size: 12, weight: .medium))
                     .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.76))
             }
 
             HStack(spacing: 10) {
                 Image(systemName: "sun.max.fill")
                     .font(.system(size: 13.5, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.76))
-                    .frame(width: 18, alignment: .center)
+                    .foregroundStyle(.white.opacity(0.78))
+                    .frame(width: 20, height: 18, alignment: .center)
 
                 HUDBrightnessSlider(
                     value: Binding(
@@ -177,44 +271,185 @@ public struct DisplayCardView: View {
             }
         }
     }
+}
 
-    private var headerPill: some View {
-        HStack(spacing: 9) {
-            Image(systemName: display.symbolName)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white.opacity(0.92))
-                .frame(width: 20, alignment: .center)
+public struct ResolutionControlRow: View {
+    let display: DisplayState
+    @ObservedObject var coordinator: DisplayCoordinator
 
-            Text(display.name)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white.opacity(0.95))
-                .lineLimit(1)
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Resolution")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.68))
 
-            if display.isMain {
-                MainDisplayBadge()
+                Spacer(minLength: 8)
+
+                resolutionMenu
             }
 
-            Spacer(minLength: 8)
+            HStack(spacing: 10) {
+                resolutionIcon
+
+                SteppedResolutionSlider(
+                    stepCount: display.availableModes.count,
+                    selectedIndex: display.activeOrPreviewModeIndex ?? max(0, display.availableModes.count - 1),
+                    accessibilityValue: display.resolutionLabel,
+                    onPreviewStep: { stepIndex in
+                        coordinator.previewResolution(display.displayID, stepIndex: stepIndex)
+                    },
+                    onCommitStep: { stepIndex in
+                        coordinator.previewResolution(display.displayID, stepIndex: stepIndex)
+                        coordinator.commitResolution(display.displayID)
+                    }
+                )
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(
-            Capsule(style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.17),
-                            Color.white.opacity(0.10)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+    }
+
+    private var resolutionMenu: some View {
+        Menu {
+            ForEach(display.availableModes) { mode in
+                Button {
+                    coordinator.commitResolution(display.displayID, modeID: mode.modeID)
+                } label: {
+                    if mode.modeID == display.currentModeID {
+                        Label(mode.label, systemImage: "checkmark")
+                    } else {
+                        Text(mode.label)
+                    }
+                }
+            }
+        } label: {
+            Text(display.resolutionLabel.isEmpty ? "—" : display.resolutionLabel)
+                .font(.system(size: 12, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(
+                    display.previewModeID != nil
+                        ? Color.white.opacity(0.95)
+                        : Color.white.opacity(0.76)
                 )
-                .overlay(
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(display.availableModes.isEmpty)
+        .help("Select Display Resolution")
+    }
+
+    private var resolutionIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                .stroke(Color.white.opacity(0.55), lineWidth: 1)
+                .frame(width: 16, height: 13)
+
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 8.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.78))
+        }
+        .frame(width: 20, height: 18, alignment: .center)
+    }
+}
+
+public struct SteppedResolutionSlider: View {
+    let stepCount: Int
+    let selectedIndex: Int
+    let accessibilityValue: String
+    let onPreviewStep: (Int) -> Void
+    let onCommitStep: (Int) -> Void
+
+    @State private var lastPreviewedIndex: Int?
+
+    private let trackHeight: CGFloat = 5.5
+    private let thumbDiameter: CGFloat = 18
+
+    private var isInteractive: Bool {
+        stepCount > 1
+    }
+
+    private var clampedIndex: Int {
+        guard stepCount > 0 else { return 0 }
+        return min(max(0, selectedIndex), stepCount - 1)
+    }
+
+    private var progressFraction: CGFloat {
+        guard stepCount > 0 else { return 0 }
+        guard stepCount > 1 else { return 1 }
+        return CGFloat(clampedIndex) / CGFloat(stepCount - 1)
+    }
+
+    public var body: some View {
+        GeometryReader { geometry in
+            let totalWidth = max(thumbDiameter, geometry.size.width)
+            let usableWidth = max(1, totalWidth - thumbDiameter)
+            let thumbRadius = thumbDiameter / 2
+            let thumbCenterX = thumbRadius + usableWidth * progressFraction
+
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.18))
+                    .frame(height: trackHeight)
+
+                if stepCount > 0 {
                     Capsule(style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
-                )
-        )
+                        .fill(Color.white.opacity(isInteractive ? 0.92 : 0.72))
+                        .frame(width: max(trackHeight, thumbCenterX), height: trackHeight)
+
+                    Circle()
+                        .fill(Color.white.opacity(isInteractive ? 0.96 : 0.78))
+                        .frame(width: thumbDiameter, height: thumbDiameter)
+                        .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
+                        .offset(x: thumbCenterX - thumbRadius)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard isInteractive else { return }
+                        let index = stepIndex(for: value.location.x, totalWidth: totalWidth)
+                        if lastPreviewedIndex != index {
+                            lastPreviewedIndex = index
+                            onPreviewStep(index)
+                        }
+                    }
+                    .onEnded { value in
+                        guard isInteractive else { return }
+                        let index = stepIndex(for: value.location.x, totalWidth: totalWidth)
+                        lastPreviewedIndex = nil
+                        onCommitStep(index)
+                    }
+            )
+        }
+        .frame(height: 20)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Resolution")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAdjustableAction { direction in
+            guard isInteractive else { return }
+            switch direction {
+            case .increment:
+                let next = min(stepCount - 1, clampedIndex + 1)
+                onCommitStep(next)
+            case .decrement:
+                let previous = max(0, clampedIndex - 1)
+                onCommitStep(previous)
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private func stepIndex(for x: CGFloat, totalWidth: CGFloat) -> Int {
+        guard stepCount > 1 else { return 0 }
+        let thumbRadius = thumbDiameter / 2
+        let usableWidth = max(1, totalWidth - thumbDiameter)
+        let clampedX = min(max(x - thumbRadius, 0), usableWidth)
+        let fraction = clampedX / usableWidth
+        return Int((fraction * CGFloat(stepCount - 1)).rounded())
     }
 }
 
@@ -238,16 +473,16 @@ private struct HUDBrightnessSlider: View {
     @Binding var value: Double
     let percentage: Int
 
-    private let trackHeight: CGFloat = 5
-    private let thumbWidth: CGFloat = 20
-    private let thumbHeight: CGFloat = 16
+    private let trackHeight: CGFloat = 5.5
+    private let thumbDiameter: CGFloat = 18
 
     var body: some View {
         GeometryReader { geometry in
             let clamped = max(0.0, min(1.0, value))
-            let usableWidth = max(1, geometry.size.width - thumbWidth)
-            let thumbOffset = CGFloat(clamped) * usableWidth
-            let fillWidth = thumbOffset + (thumbWidth * 0.5)
+            let totalWidth = max(thumbDiameter, geometry.size.width)
+            let usableWidth = max(1, totalWidth - thumbDiameter)
+            let thumbRadius = thumbDiameter / 2
+            let thumbCenterX = thumbRadius + usableWidth * CGFloat(clamped)
 
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
@@ -256,20 +491,20 @@ private struct HUDBrightnessSlider: View {
 
                 Capsule(style: .continuous)
                     .fill(Color.white.opacity(0.92))
-                    .frame(width: max(trackHeight, fillWidth), height: trackHeight)
+                    .frame(width: max(trackHeight, thumbCenterX), height: trackHeight)
 
-                Capsule(style: .continuous)
-                    .fill(Color(white: 0.94))
-                    .frame(width: thumbWidth, height: thumbHeight)
-                    .shadow(color: .black.opacity(0.35), radius: 2, x: 0, y: 1)
-                    .offset(x: thumbOffset)
+                Circle()
+                    .fill(Color.white.opacity(0.96))
+                    .frame(width: thumbDiameter, height: thumbDiameter)
+                    .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
+                    .offset(x: thumbCenterX - thumbRadius)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { gesture in
-                        let normalized = Double((gesture.location.x - (thumbWidth * 0.5)) / usableWidth)
+                        let normalized = Double((gesture.location.x - thumbRadius) / usableWidth)
                         let nextValue = max(0.0, min(1.0, normalized))
                         if nextValue != value,
                            nextValue == 0.0 || nextValue == 1.0 || abs(nextValue - value) > 0.0005 {
@@ -279,7 +514,7 @@ private struct HUDBrightnessSlider: View {
             )
         }
         .frame(height: 20)
-        .accessibilityElement()
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Brightness")
         .accessibilityValue("\(percentage)%")
         .accessibilityAdjustableAction { direction in
@@ -292,5 +527,145 @@ private struct HUDBrightnessSlider: View {
                 break
             }
         }
+    }
+}
+
+public struct SetMainDisplayButton: View {
+    let displayName: String
+    let action: () -> Void
+    @State private var isHovering = false
+
+    public init(displayName: String, action: @escaping () -> Void) {
+        self.displayName = displayName
+        self.action = action
+    }
+
+    public var body: some View {
+        Button(action: action) {
+            Text("M")
+                .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(isHovering ? 0.95 : 0.55))
+                .frame(width: 16, height: 16)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(isHovering ? 0.22 : 0.06))
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(
+                            Color.white.opacity(isHovering ? 0.65 : 0.28),
+                            lineWidth: 0.9
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .help("Set as Main Display")
+        .accessibilityLabel("Set \(displayName) as Main Display")
+    }
+}
+
+public struct DisplayPowerToggle: View {
+    let isOn: Bool
+    let isDisabled: Bool
+    let tooltip: String
+    let accessibilityLabel: String
+    let onToggle: () -> Void
+
+    public init(
+        isOn: Bool,
+        isDisabled: Bool,
+        tooltip: String,
+        accessibilityLabel: String,
+        onToggle: @escaping () -> Void
+    ) {
+        self.isOn = isOn
+        self.isDisabled = isDisabled
+        self.tooltip = tooltip
+        self.accessibilityLabel = accessibilityLabel
+        self.onToggle = onToggle
+    }
+
+    public var body: some View {
+        ZStack {
+            Button(action: onToggle) {
+                ZStack(alignment: isOn ? .trailing : .leading) {
+                    Capsule(style: .continuous)
+                        .fill(trackColor)
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.white.opacity(isDisabled ? 0.08 : 0.16), lineWidth: 0.7)
+                        )
+                        .frame(width: 38, height: 20)
+
+                    Capsule(style: .continuous)
+                        .fill(thumbColor)
+                        .shadow(color: .black.opacity(0.28), radius: 1.5, y: 0.8)
+                        .frame(width: 20, height: 16)
+                        .padding(2)
+                }
+                .animation(.easeInOut(duration: 0.16), value: isOn)
+                .opacity(isDisabled ? 0.45 : 1.0)
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isDisabled)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(isOn ? "On" : "Off")
+        }
+        .help(tooltip)
+    }
+
+    private var trackColor: Color {
+        if isOn {
+            return isDisabled
+                ? Color(red: 0.25, green: 0.30, blue: 0.40)
+                : Color(red: 0.23, green: 0.35, blue: 0.56)
+        }
+        return Color.white.opacity(0.10)
+    }
+
+    private var thumbColor: Color {
+        isOn ? Color.white.opacity(0.84) : Color.white.opacity(0.62)
+    }
+}
+
+public struct ReconnectAllDisplaysButton: View {
+    let action: () -> Void
+    @State private var isHovering = false
+
+    public init(action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    public var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Reconnect All Displays")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            .foregroundStyle(.white.opacity(0.95))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.accentColor.opacity(isHovering ? 0.38 : 0.26))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.accentColor.opacity(0.48), lineWidth: 0.8)
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .help("Re-enable every display that is currently turned off")
     }
 }

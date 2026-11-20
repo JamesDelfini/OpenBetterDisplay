@@ -24,6 +24,7 @@ public struct RawDisplayMode: Equatable, Sendable {
     public var pixelHeight: Int
     public var refreshRate: Double
     public var isUsableForDesktopGUI: Bool
+    public var isNative: Bool
 
     public init(
         modeID: Int32,
@@ -32,7 +33,8 @@ public struct RawDisplayMode: Equatable, Sendable {
         pixelWidth: Int? = nil,
         pixelHeight: Int? = nil,
         refreshRate: Double = 60.0,
-        isUsableForDesktopGUI: Bool = true
+        isUsableForDesktopGUI: Bool = true,
+        isNative: Bool = false
     ) {
         self.modeID = modeID
         self.width = width
@@ -41,6 +43,7 @@ public struct RawDisplayMode: Equatable, Sendable {
         self.pixelHeight = pixelHeight ?? height
         self.refreshRate = refreshRate
         self.isUsableForDesktopGUI = isUsableForDesktopGUI
+        self.isNative = isNative
     }
 }
 
@@ -117,12 +120,27 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum DisplayToggleLockReason: Equatable, Sendable {
+    case mainDisplay
+    case lastActiveDisplay
+
+    public var tooltip: String {
+        switch self {
+        case .mainDisplay:
+            return "Cannot turn off the Main Display. Set another display as Main first."
+        case .lastActiveDisplay:
+            return "Cannot turn off the last remaining active display."
+        }
+    }
+}
+
 public struct DisplayState: Equatable, Identifiable, Sendable {
     public var displayID: UInt32
     public var name: String
     public var isBuiltIn: Bool
     public var isMain: Bool
     public var isEnabled: Bool
+    public var canToggleOff: Bool
     public var symbolName: String
     public var brightness: Double
     public var brightnessBackend: BrightnessBackendUsed
@@ -132,8 +150,34 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
 
     public var id: UInt32 { displayID }
 
+    public var canSetAsMain: Bool {
+        isEnabled && !isMain
+    }
+
     public var brightnessPercentage: Int {
         Int((brightness * 100.0).rounded())
+    }
+
+    public var activeOrPreviewMode: DisplayModeOption? {
+        if let previewModeID,
+           let preview = availableModes.first(where: { $0.modeID == previewModeID }) {
+            return preview
+        }
+        if let current = availableModes.first(where: { $0.modeID == currentModeID }) {
+            return current
+        }
+        return availableModes.first(where: { $0.scalePercentage == 100 }) ?? availableModes.last
+    }
+
+    public var activeOrPreviewModeIndex: Int? {
+        guard let targetID = activeOrPreviewMode?.modeID else {
+            return nil
+        }
+        return availableModes.firstIndex(where: { $0.modeID == targetID })
+    }
+
+    public var resolutionLabel: String {
+        activeOrPreviewMode?.label ?? ""
     }
 
     public init(
@@ -142,6 +186,7 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         isBuiltIn: Bool = false,
         isMain: Bool = false,
         isEnabled: Bool = true,
+        canToggleOff: Bool = false,
         symbolName: String = "",
         brightness: Double = 1.0,
         brightnessBackend: BrightnessBackendUsed = .hardwareDDC,
@@ -154,6 +199,7 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         self.isBuiltIn = isBuiltIn
         self.isMain = isMain
         self.isEnabled = isEnabled
+        self.canToggleOff = canToggleOff
         self.symbolName = symbolName
         self.brightness = brightness
         self.brightnessBackend = brightnessBackend

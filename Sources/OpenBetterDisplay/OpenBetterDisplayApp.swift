@@ -6,8 +6,9 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
-    private var coordinator: DisplayCoordinator!
+    private var coordinator: DisplayCoordinator?
     private var reconfigurationObserver: DisplayReconfigurationObserver?
+    private var wakeObserver: NSObjectProtocol?
     private var eventMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -18,7 +19,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.coordinator = coordinator
 
         self.reconfigurationObserver = DisplayReconfigurationObserver { [weak self] in
-            self?.coordinator.handleDisplayReconfiguration()
+            self?.coordinator?.handleDisplayReconfiguration()
+        }
+
+        self.wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.coordinator?.handleSystemWake()
+            }
         }
 
         configurePopover(with: coordinator)
@@ -26,6 +37,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+        reconfigurationObserver?.stop()
+        reconfigurationObserver = nil
         coordinator?.handleAppWillTerminate()
     }
 
@@ -36,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingController = NSHostingController(
             rootView: DisplayPopoverView(coordinator: coordinator)
         )
+        hostingController.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hostingController
     }
 
@@ -65,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPopover() {
         guard let button = statusItem?.button else { return }
-        coordinator.refreshDisplays()
+        coordinator?.refreshDisplays()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
 

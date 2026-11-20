@@ -134,8 +134,47 @@ public struct DisplayCardView: View {
     @ObservedObject var coordinator: DisplayCoordinator
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             headerPill
+
+            if display.isEnabled {
+                brightnessSection
+                    .padding(.horizontal, 8)
+            }
+        }
+    }
+
+    private var brightnessSection: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Brightness")
+                    .font(.system(size: 12.5, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.72))
+
+                Spacer()
+
+                Text("\(display.brightnessPercentage)%")
+                    .font(.system(size: 12.5, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .monospacedDigit()
+            }
+
+            HStack(spacing: 10) {
+                Image(systemName: "sun.max.fill")
+                    .font(.system(size: 13.5, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.76))
+                    .frame(width: 18, alignment: .center)
+
+                HUDBrightnessSlider(
+                    value: Binding(
+                        get: { display.brightness },
+                        set: { newLevel in
+                            coordinator.setBrightness(display.displayID, level: newLevel)
+                        }
+                    ),
+                    percentage: display.brightnessPercentage
+                )
+            }
         }
     }
 
@@ -192,5 +231,66 @@ public struct MainDisplayBadge: View {
                     .fill(Color.white.opacity(0.62))
             )
             .help("Main Display")
+    }
+}
+
+private struct HUDBrightnessSlider: View {
+    @Binding var value: Double
+    let percentage: Int
+
+    private let trackHeight: CGFloat = 5
+    private let thumbWidth: CGFloat = 20
+    private let thumbHeight: CGFloat = 16
+
+    var body: some View {
+        GeometryReader { geometry in
+            let clamped = max(0.0, min(1.0, value))
+            let usableWidth = max(1, geometry.size.width - thumbWidth)
+            let thumbOffset = CGFloat(clamped) * usableWidth
+            let fillWidth = thumbOffset + (thumbWidth * 0.5)
+
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.18))
+                    .frame(height: trackHeight)
+
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.92))
+                    .frame(width: max(trackHeight, fillWidth), height: trackHeight)
+
+                Capsule(style: .continuous)
+                    .fill(Color(white: 0.94))
+                    .frame(width: thumbWidth, height: thumbHeight)
+                    .shadow(color: .black.opacity(0.35), radius: 2, x: 0, y: 1)
+                    .offset(x: thumbOffset)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        let normalized = Double((gesture.location.x - (thumbWidth * 0.5)) / usableWidth)
+                        let nextValue = max(0.0, min(1.0, normalized))
+                        if nextValue != value,
+                           nextValue == 0.0 || nextValue == 1.0 || abs(nextValue - value) > 0.0005 {
+                            value = nextValue
+                        }
+                    }
+            )
+        }
+        .frame(height: 20)
+        .accessibilityElement()
+        .accessibilityLabel("Brightness")
+        .accessibilityValue("\(percentage)%")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment:
+                value = min(1.0, value + 0.05)
+            case .decrement:
+                value = max(0.0, value - 0.05)
+            @unknown default:
+                break
+            }
+        }
     }
 }

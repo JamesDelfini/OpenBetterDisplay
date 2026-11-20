@@ -3,6 +3,7 @@ import Foundation
 public final class FakeDisplayDriver: DisplayDriver, @unchecked Sendable {
     public var onlineDisplays: [RawDisplayInfo]
     public var brightnessReadings: [UInt32: BrightnessReading]
+    public var unsupportedDDCDisplayIDs: Set<UInt32>
     public var enabledHistory: [(displayID: UInt32, enabled: Bool)] = []
     public var mainDisplayHistory: [UInt32] = []
     public var setBrightnessHistory: [(displayID: UInt32, level: Double)] = []
@@ -11,10 +12,12 @@ public final class FakeDisplayDriver: DisplayDriver, @unchecked Sendable {
 
     public init(
         onlineDisplays: [RawDisplayInfo] = [],
-        brightnessReadings: [UInt32: BrightnessReading] = [:]
+        brightnessReadings: [UInt32: BrightnessReading] = [:],
+        unsupportedDDCDisplayIDs: Set<UInt32> = []
     ) {
         self.onlineDisplays = onlineDisplays
         self.brightnessReadings = brightnessReadings
+        self.unsupportedDDCDisplayIDs = unsupportedDDCDisplayIDs
     }
 
     public func fetchOnlineDisplays() -> [RawDisplayInfo] {
@@ -31,18 +34,37 @@ public final class FakeDisplayDriver: DisplayDriver, @unchecked Sendable {
 
     public func getBrightness(_ displayID: UInt32) -> BrightnessReading {
         if let reading = brightnessReadings[displayID] {
+            if unsupportedDDCDisplayIDs.contains(displayID), reading.backend == .hardwareDDC {
+                return BrightnessReading(level: reading.level, backend: .softwareGamma)
+            }
             return reading
         }
         let isBuiltIn = onlineDisplays.first(where: { $0.displayID == displayID })?.isBuiltIn ?? false
+        let backend: BrightnessBackendUsed
+        if isBuiltIn {
+            backend = .nativeAppleBacklight
+        } else if unsupportedDDCDisplayIDs.contains(displayID) {
+            backend = .softwareGamma
+        } else {
+            backend = .hardwareDDC
+        }
         return BrightnessReading(
             level: 1.0,
-            backend: isBuiltIn ? .nativeAppleBacklight : .hardwareDDC
+            backend: backend
         )
     }
 
     public func setBrightness(_ displayID: UInt32, level: Double) -> BrightnessBackendUsed {
         setBrightnessHistory.append((displayID: displayID, level: level))
-        let backend = getBrightness(displayID).backend
+        let isBuiltIn = onlineDisplays.first(where: { $0.displayID == displayID })?.isBuiltIn ?? false
+        let backend: BrightnessBackendUsed
+        if isBuiltIn {
+            backend = .nativeAppleBacklight
+        } else if unsupportedDDCDisplayIDs.contains(displayID) {
+            backend = .softwareGamma
+        } else {
+            backend = getBrightness(displayID).backend
+        }
         brightnessReadings[displayID] = BrightnessReading(level: level, backend: backend)
         return backend
     }

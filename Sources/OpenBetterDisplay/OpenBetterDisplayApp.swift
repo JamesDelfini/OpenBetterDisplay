@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusItem()
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        coordinator?.handleAppWillTerminate()
+    }
+
     private func configurePopover(with coordinator: DisplayCoordinator) {
         popover.behavior = .transient
         popover.animates = true

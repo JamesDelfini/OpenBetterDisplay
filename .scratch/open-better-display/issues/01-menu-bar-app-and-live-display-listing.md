@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] Running the app places a monitor icon in the macOS system menu bar (without a Dock icon) and opens a dark translucent popover when clicked.
 - [x] Every connected display appears as a rounded header pill showing a laptop icon for the built-in display, a monitor icon for external displays, and the display's human-readable product name.
@@ -13,3 +13,7 @@
 - [x] The popover footer includes a working `Launch at Login` toggle and a `Quit OpenBetterDisplay` button.
 - [x] The repository includes an MIT license, documentation for building and packaging the `.app` bundle from the command line or Xcode, and git ignore rules that exclude proprietary disk images and build artifacts.
 - [x] Behavioral tests exercise `DisplayCoordinator` across the `DisplayDriver` seam using an in-memory `FakeDisplayDriver` to verify multi-display discovery, human-readable naming, built-in vs. external classification, and Main Display identification.
+
+## Comments
+
+- Implemented on `feat/open-better-display` in `c4314fb` and refined after code review in `af76b79` (added `NSVisualEffectView` popover backing, IOKit EDID name fallback, and truthful `Launch at Login` error state).

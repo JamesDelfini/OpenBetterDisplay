@@ -1,21 +1,23 @@
 # OpenBetterDisplay
 
-Lightweight open-source replacement for BetterDisplay on macOS: manage built-in and external monitors from the menu bar — OS-level display disconnect, Apple Silicon DDC/CI hardware brightness, HiDPI resolution scaling, and Main Display switching, with macOS private display APIs documented.
+Lightweight open-source replacement for BetterDisplay on macOS: manage built-in and external monitors from the menu bar — OS-level display disconnect, Apple Silicon DDC/CI hardware brightness, Brightness Hotkeys, Display Mode filtering & Favorite Modes, ProMotion/VRR/NTSC Refresh Rate switching, and Main Display switching, with macOS private display APIs documented.
 
 ## Features
 
-- **Dark Translucent Menu Bar Popover:** Native `NSVisualEffectView` (`hudWindow` / vibrant dark) menu bar popover listing every connected monitor (both **Enabled Displays** and **Disconnected Displays**) with human-readable model names (`CoreDisplay` → `NSScreen` → IOKit EDID fallback), laptop vs. external monitor icons, and the **Main Display Badge** (`M`) exclusively on the current **Main Display**.
+- **Dark Translucent Menu Bar Popover:** Native `NSVisualEffectView` (`hudWindow` / vibrant dark) menu bar popover listing every connected monitor (both **Enabled Displays** and **Disconnected Displays**) with human-readable model names (`CoreDisplay` → `NSScreen` → IOKit EDID fallback), laptop vs. external monitor icons, **Main Display Badge** (`M`) exclusively on the current **Main Display**, and screen-bounded scrollable sizing.
 - **OS-Level Display Disconnect & Safety Guardrails:** Toggle individual external or built-in displays off and back on at the macOS WindowServer level (`CGSConfigureDisplayEnabled`) so macOS consolidates windows onto remaining **Enabled Displays** and external monitors enter hardware standby while staying listed in the popover.
   - Locks the off-toggle on the **Main Display** and on the last remaining **Enabled Display** so you can never lock yourself out of visual output.
   - Surfaces a **Reconnect All Displays** button whenever one or more **Disconnected Displays** exist.
   - Automatically reconnects all **Disconnected Displays** on Mac wake-from-sleep and on app quit.
-- **Main Display Switching:** Every **Enabled Display** includes a collapsible disclosure drawer (`⌄`) exposing **Set as Main Display** (`CGConfigureDisplayOrigin`), closing the popover cleanly before macOS relocates the menu bar and Dock.
+- **Main Display Switching:** Every **Enabled Display** includes a collapsible disclosure drawer (`⌄`) exposing **Set as Main Display** (`CGConfigureDisplayOrigin`), closing the popover synchronously before macOS relocates the menu bar and Dock.
+- **Display Mode Browser, Interactive Filters & Favorite Modes:** Collapsible **Display Mode** browser showing macOS-vetted `>= 720p` modes with `Default Mode` (`★`), 1:1 `Native Mode` (`≡`), `✦ HiDPI`, aspect ratio, refresh rate, and color depth badges (`10bit` / `8bit`), live `Filter...` chip toggles with per-display persistence, and 5 assignable **Favorite Modes** (`1`–`5`) via `Manage...` or right-click.
+- **Refresh Rate Picker (`ProMotion`, Variable Refresh Rate, Integer & NTSC):** Collapsible **Refresh Rate** section listing `ProMotion (Variable)` (via `SLSIsDisplayModeProMotion`), external Variable Refresh Rate ranges (e.g. `48–120Hz (Variable)`), standard integer refresh rates, and display-exposed **NTSC Refresh Rates** (`59.94Hz`, `47.95Hz`, etc.) for the active resolution and scaling tier.
+- **Brightness Hotkeys & Floating HUD:** Global brightness hotkey routing (**Follow Mouse Cursor**, **All Enabled Displays**, **Main Display**) supporting hardware brightness keys, optional literal `F1`/`F2` keys, fine-step adjustments, Fn-key mode diagnostics (`HIDFKeyMode`), and a floating Brightness HUD overlay for adjusted external displays.
 - **3-Tier Hardware & Fallback Brightness Control:**
   - **Tier 1 — Native Apple Backlight (`DisplayServices`):** Controls the Built-in Display backlight and stays in sync with macOS brightness keys.
   - **Tier 2 — Apple Silicon DDC/CI (`IOAVService` I2C VCP `0x10`):** Controls physical external monitor backlight over `DCPAVServiceProxy` with EDID / `IODisplayLocation` matching, leading+trailing write throttling, and transient-failure cooldown recovery.
   - **Tier 3 — Software Gamma Fallback (`CGSetDisplayTransferByTable`):** Automatic fallback with a safe minimum luminance floor (`0.08`) when a monitor does not respond to DDC/CI, restored cleanly on quit.
   - Persists last-set brightness per display across app restarts and hotplug events.
-- **HiDPI Resolution Slider & Mode Picker:** Filters modes to the display's native aspect ratio and current refresh rate (preferring HiDPI modes on Retina/4K displays and standard modes on 1x panels), previews `<Width>x<Height> · <Scale>%` live while dragging without flickering, commits once on mouse release, and lets you click the resolution label to jump directly via a dropdown menu.
 - **Zero Bloat:** Includes **Launch at Login** (`SMAppService`) and **Quit OpenBetterDisplay** — no virtual screens, PiP, TV controllers, or Pro upsells.
 
 ## Requirements

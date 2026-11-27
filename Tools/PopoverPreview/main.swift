@@ -162,10 +162,10 @@ private func renderPreview() {
                 modes: [
                     RawDisplayMode(
                         modeID: 10, width: 1147, height: 745, pixelWidth: 2294, pixelHeight: 1490, refreshRate: 120.0, bitsPerSample: 10,
-                        isVRR: true, isProMotion: true, minRefreshRate: 24.0),
+                        isVariableRefreshRate: true, minRefreshRate: 24.0),
                     RawDisplayMode(
                         modeID: 11, width: 1352, height: 878, pixelWidth: 2704, pixelHeight: 1756, refreshRate: 120.0, bitsPerSample: 10,
-                        isVRR: true, isProMotion: true, minRefreshRate: 24.0),
+                        isVariableRefreshRate: true, minRefreshRate: 24.0),
                     RawDisplayMode(
                         modeID: 12,
                         width: 1512,
@@ -176,8 +176,7 @@ private func renderPreview() {
                         isNative: true,
                         bitsPerSample: 10,
                         isDefault: true,
-                        isVRR: true,
-                        isProMotion: true,
+                        isVariableRefreshRate: true,
                         minRefreshRate: 24.0
                     ),
                     RawDisplayMode(
@@ -209,7 +208,7 @@ private func renderPreview() {
                     ),
                     RawDisplayMode(
                         modeID: 13, width: 1800, height: 1169, pixelWidth: 3600, pixelHeight: 2338, refreshRate: 120.0, bitsPerSample: 10,
-                        isVRR: true, isProMotion: true, minRefreshRate: 24.0),
+                        isVariableRefreshRate: true, minRefreshRate: 24.0),
                     RawDisplayMode(
                         modeID: 14, width: 3024, height: 1964, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0, isNative: true,
                         bitsPerSample: 10)
@@ -271,7 +270,7 @@ private func renderPreview() {
                         pixelHeight: 2880,
                         refreshRate: 120.0,
                         bitsPerSample: 10,
-                        isVRR: true,
+                        isVariableRefreshRate: true,
                         minRefreshRate: 48.0
                     ),
                     RawDisplayMode(
@@ -282,7 +281,7 @@ private func renderPreview() {
                         pixelHeight: 2880,
                         refreshRate: 75.0,
                         bitsPerSample: 10,
-                        isVRR: true,
+                        isVariableRefreshRate: true,
                         minRefreshRate: 48.0
                     ),
                     RawDisplayMode(

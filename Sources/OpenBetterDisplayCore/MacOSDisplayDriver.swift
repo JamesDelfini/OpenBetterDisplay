@@ -27,7 +27,7 @@ public enum SkyLightDisplayModeDescription {
     public static let displayModeStretchedFlag: UInt32 = 0x0000_0800
     public static let displayModeNativeFlag: UInt32 = 0x0200_0000
     private static let displayModeValidAndSafeMask: UInt32 = 0x0000_0003
-    private static let displayModeUnsafeFlag: UInt32 = 0x4000_0000
+    static let displayModeUnsafeFlag: UInt32 = 0x4000_0000
     private static let pixelEncodingOffset = 0x30
     private static let pixelEncodingLength = 128
 
@@ -83,7 +83,7 @@ public enum SkyLightDisplayModeDescription {
         let isNative = (combinedFlags & displayModeNativeFlag) != 0
         let isUsableForDesktopGUI =
             (ioFlags & displayModeValidAndSafeMask) == displayModeValidAndSafeMask
-            && (flags & displayModeUnsafeFlag) == 0
+            && (combinedFlags & displayModeUnsafeFlag) == 0
             && !isStretched
             && width >= 720
             && height >= 720
@@ -669,8 +669,7 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 if existing.refreshRate <= 0, skyLightMode.refreshRate > 0 {
                     existing.refreshRate = skyLightMode.refreshRate
                 }
-                existing.isVRR = existing.isVRR || skyLightMode.isVRR
-                existing.isProMotion = existing.isProMotion || skyLightMode.isProMotion
+                existing.isVariableRefreshRate = existing.isVariableRefreshRate || skyLightMode.isVariableRefreshRate
                 if let minRefreshRate = skyLightMode.minRefreshRate {
                     existing.minRefreshRate = minRefreshRate
                 }
@@ -684,36 +683,44 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         return orderedIDs.compactMap { mergedByID[$0] }
     }
 
-    public static func resolveVRRMetadata(
-        isVRR: Bool,
-        isProMotion: Bool,
+    public static func resolveVariableRefreshRateMetadata(
+        isVariableRefreshRate: Bool,
+        usesAdaptiveFloorFallback: Bool,
         reportedMinRefreshRate: Double?,
         maxRefreshRate: Double,
         isCurrentMode: Bool,
         activeScreenMaxRefreshInterval: TimeInterval?
-    ) -> (isVRR: Bool, isProMotion: Bool, minRefreshRate: Double?) {
-        let normalized = DisplayModeFilter.normalizeVRR(
-            isVRR: isVRR,
-            isProMotion: isProMotion,
+    ) -> (isVariableRefreshRate: Bool, minRefreshRate: Double?) {
+        let effectiveIsVariable = isVariableRefreshRate || usesAdaptiveFloorFallback
+        guard effectiveIsVariable else {
+            return (false, nil)
+        }
+
+        let normalized = DisplayModeFilter.normalizeVariableRefreshRate(
+            isVariableRefreshRate: true,
             minRefreshRate: reportedMinRefreshRate,
             maxRefreshRate: maxRefreshRate
         )
-        let hasValidReportedMin =
-            reportedMinRefreshRate.map { $0 > 0.5 && $0 < maxRefreshRate - 0.5 } ?? false
+        if normalized.minRefreshRate != nil {
+            return normalized
+        }
 
-        if normalized.isProMotion,
-            !hasValidReportedMin,
-            isCurrentMode,
-            let interval = activeScreenMaxRefreshInterval,
-            interval > 0
-        {
-            let derivedMin = (1.0 / interval).rounded()
-            if derivedMin > 0.5, derivedMin < maxRefreshRate - 0.5 {
-                return (true, true, derivedMin)
+        if usesAdaptiveFloorFallback {
+            if isCurrentMode,
+                let interval = activeScreenMaxRefreshInterval,
+                interval > 0
+            {
+                let derivedMin = (1.0 / interval).rounded()
+                if derivedMin > 0.5, derivedMin < maxRefreshRate - 0.5 {
+                    return (true, derivedMin)
+                }
+            }
+            if maxRefreshRate > 24.5 {
+                return (true, 24.0)
             }
         }
 
-        return normalized
+        return (true, nil)
     }
 
     private func fetchDisplayModes(
@@ -731,6 +738,7 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         let mappedCGModes = cgModes.map { mode in
             let ioFlags = mode.ioFlags
             let isStretched = (ioFlags & SkyLightDisplayModeDescription.displayModeStretchedFlag) != 0
+            let isUnsafe = (ioFlags & SkyLightDisplayModeDescription.displayModeUnsafeFlag) != 0
             return RawDisplayMode(
                 modeID: mode.ioDisplayModeID,
                 width: mode.width,
@@ -738,7 +746,11 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 pixelWidth: mode.pixelWidth,
                 pixelHeight: mode.pixelHeight,
                 refreshRate: mode.refreshRate,
-                isUsableForDesktopGUI: mode.isUsableForDesktopGUI() && !isStretched && mode.width >= 720 && mode.height >= 720,
+                isUsableForDesktopGUI: mode.isUsableForDesktopGUI()
+                    && !isStretched
+                    && !isUnsafe
+                    && mode.width >= 720
+                    && mode.height >= 720,
                 isNative: (ioFlags & SkyLightDisplayModeDescription.displayModeNativeFlag) != 0,
                 bitsPerSample: 8,
                 isDefault: (ioFlags & SkyLightDisplayModeDescription.displayModeDefaultFlag) != 0,
@@ -789,26 +801,25 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 )
             }
             if err == .success, var parsed = SkyLightDisplayModeDescription.parse(bytes: buffer) {
-                let rawIsVRR = slsIsDisplayModeVRR?(displayID, index) ?? false
-                let rawIsProMotion = slsIsDisplayModeProMotion?(displayID, index) ?? false
+                let rawIsVariable = slsIsDisplayModeVRR?(displayID, index) ?? false
+                let rawUsesAdaptiveFloor = slsIsDisplayModeProMotion?(displayID, index) ?? false
                 var reportedMinHz: Double?
-                if let slsGetDisplayModeMinRefreshRate, rawIsVRR || rawIsProMotion {
+                if let slsGetDisplayModeMinRefreshRate, rawIsVariable || rawUsesAdaptiveFloor {
                     var minHz: Float = 0
                     if slsGetDisplayModeMinRefreshRate(displayID, index, &minHz) == .success {
                         reportedMinHz = Double(minHz)
                     }
                 }
-                let vrr = Self.resolveVRRMetadata(
-                    isVRR: rawIsVRR,
-                    isProMotion: rawIsProMotion,
+                let variableRate = Self.resolveVariableRefreshRateMetadata(
+                    isVariableRefreshRate: rawIsVariable,
+                    usesAdaptiveFloorFallback: rawUsesAdaptiveFloor,
                     reportedMinRefreshRate: reportedMinHz,
                     maxRefreshRate: parsed.refreshRate,
                     isCurrentMode: parsed.modeID == currentModeID,
                     activeScreenMaxRefreshInterval: activeScreenMaxRefreshInterval
                 )
-                parsed.isVRR = vrr.isVRR
-                parsed.isProMotion = vrr.isProMotion
-                parsed.minRefreshRate = vrr.minRefreshRate
+                parsed.isVariableRefreshRate = variableRate.isVariableRefreshRate
+                parsed.minRefreshRate = variableRate.minRefreshRate
                 modes.append(parsed)
             }
         }

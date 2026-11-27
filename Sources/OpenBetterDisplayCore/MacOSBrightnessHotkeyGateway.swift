@@ -6,98 +6,55 @@ import Foundation
 import IOKit.hid
 import IOKit.hidsystem
 
-public struct ParsedMediaBrightnessKey: Equatable, Sendable {
-    public var keyCode: Int32
-    public var isKeyDown: Bool
-    public var isKeyUp: Bool
-    public var event: BrightnessKeyEvent
-
-    public init(
-        keyCode: Int32,
-        isKeyDown: Bool,
-        isKeyUp: Bool,
-        event: BrightnessKeyEvent
-    ) {
-        self.keyCode = keyCode
-        self.isKeyDown = isKeyDown
-        self.isKeyUp = isKeyUp
-        self.event = event
-    }
+public protocol AccessibilityPollingCancellable: AnyObject, Sendable {
+    nonisolated func cancel()
 }
 
-public enum BrightnessKeyEventParser {
-    private static let keyDownState = 0x0A
-    private static let keyUpState = 0x0B
-    private static let repeatFlagMask = 0x0001
+@MainActor
+public protocol AccessibilityPollingScheduling: AnyObject {
+    func scheduleRepeating(
+        interval: TimeInterval,
+        action: @escaping @MainActor () -> Void
+    ) -> AccessibilityPollingCancellable
+}
 
-    public static func parseMediaKeyData(
-        data1: Int,
-        isFineModifierActive: Bool,
-        pointerLocation: CGPoint?
-    ) -> ParsedMediaBrightnessKey? {
-        let keyCode = Int32((data1 & 0xFFFF_0000) >> 16)
-        let direction: BrightnessKeyDirection
-        switch keyCode {
-        case NX_KEYTYPE_BRIGHTNESS_UP:
-            direction = .increase
-        case NX_KEYTYPE_BRIGHTNESS_DOWN:
-            direction = .decrease
-        default:
-            return nil
+@MainActor
+private final class DispatchAccessibilityPollingScheduler: AccessibilityPollingScheduling {
+    private final class Token: AccessibilityPollingCancellable, @unchecked Sendable {
+        private let lock = NSLock()
+        private var source: DispatchSourceTimer?
+
+        init(source: DispatchSourceTimer) {
+            self.source = source
         }
 
-        let keyFlags = data1 & 0x0000_FFFF
-        let keyState = (keyFlags & 0xFF00) >> 8
-        let isKeyDown = keyState == keyDownState
-        let isKeyUp = keyState == keyUpState
-        guard isKeyDown || isKeyUp else {
-            return nil
+        nonisolated func cancel() {
+            lock.lock()
+            let current = source
+            source = nil
+            lock.unlock()
+            current?.cancel()
         }
-
-        let isRepeat = (keyFlags & repeatFlagMask) != 0
-        let event = BrightnessKeyEvent(
-            direction: direction,
-            source: .mediaBrightness,
-            isFine: isFineModifierActive,
-            isRepeat: isRepeat,
-            pointerLocation: pointerLocation
-        )
-        return ParsedMediaBrightnessKey(
-            keyCode: keyCode,
-            isKeyDown: isKeyDown,
-            isKeyUp: isKeyUp,
-            event: event
-        )
     }
 
-    public static func convertAppKitPointerToCoreGraphics(
-        _ mouseLocation: CGPoint,
-        mainDisplayHeight: CGFloat
-    ) -> CGPoint? {
-        guard mainDisplayHeight > 0 else {
-            return nil
-        }
-        return CGPoint(x: mouseLocation.x, y: mainDisplayHeight - mouseLocation.y)
-    }
-
-    public static func resolveFunctionKeyMode(
-        hidFKeyMode: Int?,
-        cfPreferenceFnState: Bool?
-    ) -> FunctionKeyMode {
-        if let hidFKeyMode {
-            switch hidFKeyMode {
-            case 0:
-                return .mediaKeys
-            case 1:
-                return .standardFunctionKeys
-            default:
-                break
+    func scheduleRepeating(
+        interval: TimeInterval,
+        action: @escaping @MainActor () -> Void
+    ) -> AccessibilityPollingCancellable {
+        let clampedInterval = max(0.1, interval)
+        let source = DispatchSource.makeTimerSource(queue: .main)
+        source.schedule(
+            deadline: .now() + clampedInterval,
+            repeating: clampedInterval,
+            leeway: .milliseconds(250)
+        )
+        source.setEventHandler {
+            MainActor.assumeIsolated {
+                action()
             }
         }
-        if let cfPreferenceFnState {
-            return cfPreferenceFnState ? .standardFunctionKeys : .mediaKeys
-        }
-        return .unknown
+        source.resume()
+        return Token(source: source)
     }
 }
 
@@ -151,6 +108,8 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
 
     private static let hotKeySignature: OSType = 0x4F42_4448
     private static let fnStateNotificationName = Notification.Name("com.apple.keyboard.fnstatedidchange")
+    private static let accessibilityAPINotificationName = Notification.Name("com.apple.accessibility.api")
+    nonisolated public static let defaultAccessibilityPollingInterval: TimeInterval = 1.0
     private static let keyboardSettingsURL = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
     private static let accessibilitySettingsURL = URL(
         string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
@@ -159,9 +118,19 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     public var onBrightnessKeyEvent: (@MainActor (BrightnessKeyEvent) -> Bool)?
     public var onCheckerStatusDidChange: (@MainActor () -> Void)?
 
+    public var isAccessibilityPollingActive: Bool {
+        accessibilityPollTask != nil
+    }
+
     private let ioHIDEventSystemClientCreate: IOHIDEventSystemClientCreateFn?
     private let hudPresenter: BrightnessHUDPresenting?
+    private let accessibilityTrustProvider: @MainActor () -> Bool
+    private let accessibilityPollingScheduler: AccessibilityPollingScheduling
+    private let accessibilityPollingInterval: TimeInterval
+    private let distributedNotificationCenter: NotificationCenter
     private var currentPreferences = HotkeyPreferences()
+    private var isStopped = false
+    private var lastObservedAccessibilityTrusted: Bool?
     private nonisolated(unsafe) var mediaEventTap: CFMachPort?
     private nonisolated(unsafe) var mediaRunLoopSource: CFRunLoopSource?
     private var consumedMediaKeyCodes: Set<Int32> = []
@@ -170,13 +139,25 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     private nonisolated(unsafe) var repeatDelayTimer: Timer?
     private nonisolated(unsafe) var repeatIntervalTimer: Timer?
     private var activeRepeatHotKey: HotKeyIdentifier?
+    private nonisolated(unsafe) var accessibilityPollTask: AccessibilityPollingCancellable?
     private nonisolated(unsafe) var fnStateObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var accessibilityObserver: NSObjectProtocol?
     private nonisolated(unsafe) var appDidBecomeActiveObserver: NSObjectProtocol?
 
-    public init(hudPresenter: BrightnessHUDPresenting? = nil) {
+    public init(
+        hudPresenter: BrightnessHUDPresenting? = nil,
+        accessibilityTrustProvider: (@MainActor () -> Bool)? = nil,
+        accessibilityPollingScheduler: AccessibilityPollingScheduling? = nil,
+        accessibilityPollingInterval: TimeInterval = MacOSBrightnessHotkeyGateway.defaultAccessibilityPollingInterval,
+        distributedNotificationCenter: NotificationCenter = DistributedNotificationCenter.default()
+    ) {
         let ioKit = DynamicLibrary(path: "/System/Library/Frameworks/IOKit.framework/IOKit")
         self.ioHIDEventSystemClientCreate = ioKit.symbol("IOHIDEventSystemClientCreate")
         self.hudPresenter = hudPresenter
+        self.accessibilityTrustProvider = accessibilityTrustProvider ?? { AXIsProcessTrusted() }
+        self.accessibilityPollingScheduler = accessibilityPollingScheduler ?? DispatchAccessibilityPollingScheduler()
+        self.accessibilityPollingInterval = max(0.1, accessibilityPollingInterval)
+        self.distributedNotificationCenter = distributedNotificationCenter
         startStatusObservers()
     }
 
@@ -185,13 +166,14 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     }
 
     public func applyPreferences(_ preferences: HotkeyPreferences) {
+        isStopped = false
         currentPreferences = preferences
         syncMediaEventTap()
         syncLiteralF1F2HotKeys()
     }
 
     public func readCheckerStatus() -> KeyboardCheckerStatus {
-        let isTrusted = AXIsProcessTrusted()
+        let isTrusted = accessibilityTrustProvider()
         syncMediaEventTap(isAccessibilityTrusted: isTrusted)
 
         return KeyboardCheckerStatus(
@@ -233,18 +215,25 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     }
 
     public func stop() {
+        isStopped = true
         stopSystemCaptureAndObservers()
         hudPresenter?.dismissAllBrightnessHUDs()
     }
 
     nonisolated private func stopSystemCaptureAndObservers() {
+        accessibilityPollTask?.cancel()
+        accessibilityPollTask = nil
         stopRepeatTimers()
         unregisterLiteralHotKeys()
         stopMediaEventTap()
 
         if let fnStateObserver {
-            DistributedNotificationCenter.default().removeObserver(fnStateObserver)
+            distributedNotificationCenter.removeObserver(fnStateObserver)
             self.fnStateObserver = nil
+        }
+        if let accessibilityObserver {
+            distributedNotificationCenter.removeObserver(accessibilityObserver)
+            self.accessibilityObserver = nil
         }
         if let appDidBecomeActiveObserver {
             NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
@@ -255,13 +244,24 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     // MARK: - Function Key Mode Checker & Observers
 
     private func startStatusObservers() {
-        fnStateObserver = DistributedNotificationCenter.default().addObserver(
+        fnStateObserver = distributedNotificationCenter.addObserver(
             forName: Self.fnStateNotificationName,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.onCheckerStatusDidChange?()
+                guard let self, !self.isStopped else { return }
+                self.onCheckerStatusDidChange?()
+            }
+        }
+
+        accessibilityObserver = distributedNotificationCenter.addObserver(
+            forName: Self.accessibilityAPINotificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.reconcileAccessibilityState(alwaysNotify: true)
             }
         }
 
@@ -271,8 +271,36 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.onCheckerStatusDidChange?()
+                self?.reconcileAccessibilityState(alwaysNotify: true)
             }
+        }
+    }
+
+    private func reconcileAccessibilityState(alwaysNotify: Bool) {
+        guard !isStopped else { return }
+        let isTrusted = accessibilityTrustProvider()
+        let previousTrusted = lastObservedAccessibilityTrusted
+        lastObservedAccessibilityTrusted = isTrusted
+        syncMediaEventTap(isAccessibilityTrusted: isTrusted)
+        if alwaysNotify || previousTrusted != isTrusted {
+            onCheckerStatusDidChange?()
+        }
+    }
+
+    private func syncAccessibilityPollingTimer(isAccessibilityTrusted: Bool) {
+        let shouldPoll = !isStopped && currentPreferences.isMediaKeysEnabled && !isAccessibilityTrusted
+        if shouldPoll {
+            if accessibilityPollTask == nil {
+                lastObservedAccessibilityTrusted = false
+                accessibilityPollTask = accessibilityPollingScheduler.scheduleRepeating(
+                    interval: accessibilityPollingInterval
+                ) { [weak self] in
+                    self?.reconcileAccessibilityState(alwaysNotify: false)
+                }
+            }
+        } else {
+            accessibilityPollTask?.cancel()
+            accessibilityPollTask = nil
         }
     }
 
@@ -296,10 +324,17 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     // MARK: - Media Key CGEventTap
 
     private func syncMediaEventTap(isAccessibilityTrusted: Bool? = nil) {
-        let trusted = isAccessibilityTrusted ?? AXIsProcessTrusted()
-        // Never invoke CGEventTapCreate unless Accessibility is already trusted, so launch never triggers TCC prompts.
-        guard currentPreferences.isMediaKeysEnabled, trusted else {
+        let trusted = isAccessibilityTrusted ?? accessibilityTrustProvider()
+        lastObservedAccessibilityTrusted = trusted
+        syncAccessibilityPollingTimer(isAccessibilityTrusted: trusted)
+
+        guard !isStopped, currentPreferences.isMediaKeysEnabled, trusted else {
             stopMediaEventTap()
+            return
+        }
+
+        // Never invoke CGEventTapCreate unless Accessibility is already trusted, so launch never triggers TCC prompts.
+        guard AXIsProcessTrusted() else {
             return
         }
 
@@ -497,7 +532,7 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
         if eventKind == UInt32(kEventHotKeyPressed) {
             stopRepeatTimers()
             activeRepeatHotKey = identifier
-            dispatchCarbonStep(identifier, isRepeat: false)
+            dispatchCarbonStep(identifier)
             scheduleCarbonHoldRepeat(for: identifier)
             return noErr
         }
@@ -512,12 +547,11 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
         return OSStatus(eventNotHandledErr)
     }
 
-    private func dispatchCarbonStep(_ identifier: HotKeyIdentifier, isRepeat: Bool) {
+    private func dispatchCarbonStep(_ identifier: HotKeyIdentifier) {
         let keyEvent = BrightnessKeyEvent(
             direction: identifier.direction,
             source: .literalFunctionKey,
             isFine: identifier.isFine,
-            isRepeat: isRepeat,
             pointerLocation: currentPointerLocation()
         )
         _ = onBrightnessKeyEvent?(keyEvent)
@@ -532,14 +566,14 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
                 guard let self, self.activeRepeatHotKey == identifier else {
                     return
                 }
-                self.dispatchCarbonStep(identifier, isRepeat: true)
+                self.dispatchCarbonStep(identifier)
 
                 let intervalTimer = Timer(timeInterval: repeatInterval, repeats: true) { [weak self] _ in
                     MainActor.assumeIsolated {
                         guard let self, self.activeRepeatHotKey == identifier else {
                             return
                         }
-                        self.dispatchCarbonStep(identifier, isRepeat: true)
+                        self.dispatchCarbonStep(identifier)
                     }
                 }
                 RunLoop.main.add(intervalTimer, forMode: .common)

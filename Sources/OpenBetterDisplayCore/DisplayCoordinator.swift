@@ -22,9 +22,7 @@ public final class DisplayCoordinator: ObservableObject {
     @Published public private(set) var managingFavoritesDisplayID: UInt32?
     @Published public private(set) var hotkeyPreferences: HotkeyPreferences
     @Published public private(set) var keyboardCheckerStatus: KeyboardCheckerStatus = KeyboardCheckerStatus()
-    @Published public private(set) var lastBrightnessHUDUpdates: [BrightnessHUDUpdate] = []
     public var onRequestPopoverClose: (@MainActor () -> Void)?
-    public var onBrightnessHUDUpdate: (@MainActor ([BrightnessHUDUpdate]) -> Void)?
 
     private struct DDCThrottleState {
         var pendingLevel: Double?
@@ -229,12 +227,12 @@ public final class DisplayCoordinator: ObservableObject {
     }
 
     public func reconnectAllDisplays() {
-        let disabledIDs = Set(displays.filter { !$0.isEnabled }.map(\.displayID))
+        let disconnectedIDs = Set(displays.filter { !$0.isEnabled }.map(\.displayID))
             .union(disconnectedDisplays.keys)
             .sorted()
-        guard !disabledIDs.isEmpty else { return }
+        guard !disconnectedIDs.isEmpty else { return }
 
-        for id in disabledIDs {
+        for id in disconnectedIDs {
             do {
                 try driver.setDisplayEnabled(id, enabled: true)
                 disconnectedDisplays.removeValue(forKey: id)
@@ -308,25 +306,18 @@ public final class DisplayCoordinator: ObservableObject {
             let isEnabled = currentEnabledIDs.contains(raw.displayID)
             let isMain = isEnabled && raw.isMain
             let canToggleOff = isEnabled && !isMain && enabledCount > 1
-            let availableModes = DisplayModeFilter.filterModes(for: raw)
-            let defaultMode = DisplayModeFilter.resolveDefaultMode(for: raw, availableModes: availableModes)
-            let nativeMode = DisplayModeFilter.resolveNativeMode(for: raw, availableModes: availableModes)
-            let currentModeOption = DisplayModeFilter.resolveCurrentModeOption(for: raw, availableModes: availableModes)
+            let modeContext = DisplayModeContext(for: raw)
 
-            let persistenceKey = Self.persistenceKey(for: raw)
+            let persistenceKey = Self.persistenceKey(for: raw, in: sorted)
             updatedKeys[raw.displayID] = persistenceKey
             let savedFavoriteRecords = favoriteModesStore.favoriteModes(forKey: persistenceKey)
             let favoriteModes = DisplayModeFilter.resolveFavoriteModes(
                 from: savedFavoriteRecords,
-                availableModes: availableModes
+                availableModes: modeContext.availableModes
             )
 
             let filterResolution = resolveFilterState(
-                for: raw,
-                availableModes: availableModes,
-                defaultMode: defaultMode,
-                nativeMode: nativeMode,
-                currentModeOption: currentModeOption,
+                context: modeContext,
                 persistenceKey: persistenceKey
             )
 
@@ -351,14 +342,14 @@ public final class DisplayCoordinator: ObservableObject {
                 canToggleOff: canToggleOff,
                 brightness: brightness,
                 brightnessBackend: backend,
-                availableModes: availableModes,
+                availableModes: modeContext.availableModes,
                 filteredModes: filterResolution.filteredModes,
                 modeFilterState: filterResolution.filterState,
-                defaultMode: defaultMode,
-                nativeMode: nativeMode,
+                defaultMode: modeContext.defaultMode,
+                nativeMode: modeContext.nativeMode,
                 favoriteModes: favoriteModes,
                 currentModeID: raw.currentModeID,
-                currentModeOption: currentModeOption,
+                currentModeOption: modeContext.currentModeOption,
                 bounds: raw.bounds
             )
         }
@@ -372,7 +363,7 @@ public final class DisplayCoordinator: ObservableObject {
     }
 
     /// Lightweight sync for built-in displays while the popover is visible,
-    /// reflecting macOS brightness-key / Control Center changes without polling external DDC monitors.
+    /// reflecting macOS Brightness Hotkey / Control Center changes without polling external DDC monitors.
     public func syncBuiltInBrightness() {
         for index in displays.indices where displays[index].isBuiltIn && displays[index].isEnabled {
             let displayID = displays[index].displayID
@@ -491,19 +482,11 @@ public final class DisplayCoordinator: ObservableObject {
     }
 
     private func resolveFilterState(
-        for raw: RawDisplayInfo,
-        availableModes: [DisplayModeOption],
-        defaultMode: DisplayModeOption?,
-        nativeMode: DisplayModeOption?,
-        currentModeOption: DisplayModeOption?,
+        context: DisplayModeContext,
         persistenceKey: String
     ) -> (filteredModes: [DisplayModeOption], filterState: DisplayModeFilterState) {
         DisplayModeFilter.resolveFilteredModes(
-            for: raw,
-            availableModes: availableModes,
-            defaultMode: defaultMode,
-            nativeMode: nativeMode,
-            currentModeOption: currentModeOption,
+            context: context,
             persistedCriteria: modeFilterStore.modeFilter(forKey: persistenceKey)
         )
     }
@@ -556,14 +539,10 @@ public final class DisplayCoordinator: ObservableObject {
     }
 
     private func applyUpdatedFilterState(at index: Int, persistenceKey: String) {
-        let displayID = displays[index].displayID
-        guard let raw = lastKnownRawDisplays[displayID] else { return }
+        let display = displays[index]
+        guard let raw = lastKnownRawDisplays[display.displayID] else { return }
         let resolution = resolveFilterState(
-            for: raw,
-            availableModes: displays[index].availableModes,
-            defaultMode: displays[index].defaultMode,
-            nativeMode: displays[index].nativeMode,
-            currentModeOption: displays[index].currentModeOption,
+            context: DisplayModeContext(display: display, raw: raw),
             persistenceKey: persistenceKey
         )
         displays[index].filteredModes = resolution.filteredModes
@@ -882,8 +861,6 @@ public final class DisplayCoordinator: ObservableObject {
         }
 
         if !hudUpdates.isEmpty {
-            lastBrightnessHUDUpdates = hudUpdates
-            onBrightnessHUDUpdate?(hudUpdates)
             hotkeyGateway?.showBrightnessHUD(hudUpdates)
         }
 
@@ -921,10 +898,13 @@ public final class DisplayCoordinator: ObservableObject {
         switch hotkeyPreferences.targetMode {
         case .followMouseCursor:
             let resolvedPointer = pointerLocation ?? hotkeyGateway?.currentPointerLocation()
-            if let resolvedPointer,
-                let underCursor = enabledDisplays.first(where: { $0.bounds.contains(resolvedPointer) })
-            {
-                return [underCursor]
+            if let resolvedPointer {
+                if let strictMatch = enabledDisplays.first(where: { $0.bounds.contains(resolvedPointer) }) {
+                    return [strictMatch]
+                }
+                if let edgeMatch = enabledDisplays.first(where: { Self.inclusiveBounds($0.bounds, contains: resolvedPointer) }) {
+                    return [edgeMatch]
+                }
             }
             if let mainDisplay = enabledDisplays.first(where: \.isMain) {
                 return [mainDisplay]
@@ -940,7 +920,17 @@ public final class DisplayCoordinator: ObservableObject {
         }
     }
 
-    private static func persistenceKey(for raw: RawDisplayInfo) -> String {
+    private static func inclusiveBounds(_ bounds: CGRect, contains point: CGPoint) -> Bool {
+        guard bounds.width > 0, bounds.height > 0 else {
+            return false
+        }
+        return point.x >= bounds.minX
+            && point.x <= bounds.maxX
+            && point.y >= bounds.minY
+            && point.y <= bounds.maxY
+    }
+
+    private static func persistenceKey(for raw: RawDisplayInfo, in allDisplays: [RawDisplayInfo]) -> String {
         if raw.isBuiltIn {
             return "builtin"
         }
@@ -948,7 +938,17 @@ public final class DisplayCoordinator: ObservableObject {
             return String(format: "hardware:%04X:%04X:%08X", raw.vendorID, raw.modelID, raw.serialNumber)
         }
         if raw.vendorID != 0 || raw.modelID != 0 {
-            return String(format: "display:%04X:%04X:%u", raw.vendorID, raw.modelID, raw.displayID)
+            let hasDuplicateSerialLessHardware = allDisplays.contains { other in
+                !other.isBuiltIn
+                    && other.displayID != raw.displayID
+                    && other.serialNumber == 0
+                    && other.vendorID == raw.vendorID
+                    && other.modelID == raw.modelID
+            }
+            if hasDuplicateSerialLessHardware {
+                return String(format: "display:%04X:%04X:%u", raw.vendorID, raw.modelID, raw.displayID)
+            }
+            return String(format: "hardware:%04X:%04X", raw.vendorID, raw.modelID)
         }
         return "display:\(raw.displayID)"
     }

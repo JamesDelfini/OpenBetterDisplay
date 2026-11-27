@@ -210,7 +210,7 @@ final class SkyLightDisplayModeTests: XCTestCase {
         XCTAssertEqual(merged[2].bitsPerSample, 10)
     }
 
-    func testMergingSkyLightModesPreservesVRRProMotionAndMinRefreshRate() {
+    func testMergingSkyLightModesPreservesVariableRefreshRateAndMinRefreshRate() {
         let cgModes: [RawDisplayMode] = [
             RawDisplayMode(
                 modeID: 928,
@@ -241,8 +241,7 @@ final class SkyLightDisplayModeTests: XCTestCase {
                 pixelHeight: 2880,
                 refreshRate: 120.0,
                 bitsPerSample: 10,
-                isVRR: true,
-                isProMotion: false,
+                isVariableRefreshRate: true,
                 minRefreshRate: 48.0
             ),
             RawDisplayMode(
@@ -255,8 +254,7 @@ final class SkyLightDisplayModeTests: XCTestCase {
                 isNative: true,
                 bitsPerSample: 10,
                 isDefault: true,
-                isVRR: true,
-                isProMotion: true,
+                isVariableRefreshRate: true,
                 minRefreshRate: 24.0
             )
         ]
@@ -264,66 +262,60 @@ final class SkyLightDisplayModeTests: XCTestCase {
         let merged = MacOSDisplayDriver.mergeDisplayModes(cgModes: cgModes, skyLightModes: skyLightModes)
         XCTAssertEqual(merged.count, 2)
 
-        XCTAssertEqual(merged[0].isVRR, true)
-        XCTAssertEqual(merged[0].isProMotion, false)
+        XCTAssertEqual(merged[0].isVariableRefreshRate, true)
         XCTAssertEqual(merged[0].minRefreshRate ?? -1, 48.0, accuracy: 0.001)
 
-        XCTAssertEqual(merged[1].isVRR, true)
-        XCTAssertEqual(merged[1].isProMotion, true)
+        XCTAssertEqual(merged[1].isVariableRefreshRate, true)
         XCTAssertEqual(merged[1].minRefreshRate ?? -1, 24.0, accuracy: 0.001)
     }
 
-    func testResolvesVRRAndProMotionMinRefreshRateWithActiveScreenFallbackAnd24HzFloor() {
-        // Non-ProMotion VRR mode (e.g. DELL U2725QE 48-120Hz) uses SkyLight minHz directly
-        let externalVRR = MacOSDisplayDriver.resolveVRRMetadata(
-            isVRR: true,
-            isProMotion: false,
+    func testResolvesVariableRefreshRateMinRefreshRateWithActiveScreenFallbackAnd24HzFloor() {
+        // External Variable Refresh Rate mode (e.g. 48-120Hz) uses SkyLight minHz directly
+        let externalVariableRate = MacOSDisplayDriver.resolveVariableRefreshRateMetadata(
+            isVariableRefreshRate: true,
+            usesAdaptiveFloorFallback: false,
             reportedMinRefreshRate: 48.0,
             maxRefreshRate: 120.0,
             isCurrentMode: false,
             activeScreenMaxRefreshInterval: nil
         )
-        XCTAssertEqual(externalVRR.isVRR, true)
-        XCTAssertEqual(externalVRR.isProMotion, false)
-        XCTAssertEqual(externalVRR.minRefreshRate ?? -1, 48.0, accuracy: 0.001)
+        XCTAssertEqual(externalVariableRate.isVariableRefreshRate, true)
+        XCTAssertEqual(externalVariableRate.minRefreshRate ?? -1, 48.0, accuracy: 0.001)
 
-        // ProMotion active mode where SkyLight returns minHz == maxHz (120.0) derives 24Hz from NSScreen.maximumRefreshInterval
-        let activeProMotion = MacOSDisplayDriver.resolveVRRMetadata(
-            isVRR: true,
-            isProMotion: true,
+        // Built-in Variable Refresh Rate active mode where SkyLight returns minHz == maxHz (120.0) derives 24Hz from NSScreen.maximumRefreshInterval
+        let activeBuiltInAdaptive = MacOSDisplayDriver.resolveVariableRefreshRateMetadata(
+            isVariableRefreshRate: true,
+            usesAdaptiveFloorFallback: true,
             reportedMinRefreshRate: 120.0,
             maxRefreshRate: 120.0,
             isCurrentMode: true,
             activeScreenMaxRefreshInterval: 1.0 / 24.0
         )
-        XCTAssertEqual(activeProMotion.isVRR, true)
-        XCTAssertEqual(activeProMotion.isProMotion, true)
-        XCTAssertEqual(activeProMotion.minRefreshRate ?? -1, 24.0, accuracy: 0.001)
+        XCTAssertEqual(activeBuiltInAdaptive.isVariableRefreshRate, true)
+        XCTAssertEqual(activeBuiltInAdaptive.minRefreshRate ?? -1, 24.0, accuracy: 0.001)
 
-        // Inactive ProMotion mode ignores active NSScreen interval (which might be 60Hz) and falls back to 24Hz floor
-        let inactiveProMotion = MacOSDisplayDriver.resolveVRRMetadata(
-            isVRR: true,
-            isProMotion: true,
+        // Inactive Variable Refresh Rate mode ignores active NSScreen interval (which might be 60Hz) and falls back to 24Hz floor
+        let inactiveBuiltInAdaptive = MacOSDisplayDriver.resolveVariableRefreshRateMetadata(
+            isVariableRefreshRate: true,
+            usesAdaptiveFloorFallback: true,
             reportedMinRefreshRate: 120.0,
             maxRefreshRate: 120.0,
             isCurrentMode: false,
             activeScreenMaxRefreshInterval: 1.0 / 60.0
         )
-        XCTAssertEqual(inactiveProMotion.isVRR, true)
-        XCTAssertEqual(inactiveProMotion.isProMotion, true)
-        XCTAssertEqual(inactiveProMotion.minRefreshRate ?? -1, 24.0, accuracy: 0.001)
+        XCTAssertEqual(inactiveBuiltInAdaptive.isVariableRefreshRate, true)
+        XCTAssertEqual(inactiveBuiltInAdaptive.minRefreshRate ?? -1, 24.0, accuracy: 0.001)
 
-        // Fixed mode stays non-VRR with nil minRefreshRate
-        let fixedMode = MacOSDisplayDriver.resolveVRRMetadata(
-            isVRR: false,
-            isProMotion: false,
+        // Fixed mode stays non-Variable Refresh Rate with nil minRefreshRate
+        let fixedMode = MacOSDisplayDriver.resolveVariableRefreshRateMetadata(
+            isVariableRefreshRate: false,
+            usesAdaptiveFloorFallback: false,
             reportedMinRefreshRate: 60.0,
             maxRefreshRate: 60.0,
             isCurrentMode: true,
             activeScreenMaxRefreshInterval: 1.0 / 60.0
         )
-        XCTAssertEqual(fixedMode.isVRR, false)
-        XCTAssertEqual(fixedMode.isProMotion, false)
+        XCTAssertEqual(fixedMode.isVariableRefreshRate, false)
         XCTAssertNil(fixedMode.minRefreshRate)
     }
 
@@ -346,6 +338,20 @@ final class SkyLightDisplayModeTests: XCTestCase {
         XCTAssertEqual(parsed?.refreshRate ?? -1, 60.0, accuracy: 0.001)
         XCTAssertEqual(parsed?.isUsableForDesktopGUI, false)
         XCTAssertEqual(parsed?.isNative, false)
+
+        let ioUnsafeBytes = makeValidModeBuffer(
+            modeID: 100,
+            flags: 0x0000_0003,
+            ioFlags: 0x4000_0003, // unsafe bit set only in ioFlags
+            width: 1920,
+            height: 1080,
+            pixelWidth: 1920,
+            pixelHeight: 1080,
+            refreshRateFixed: 60 << 16
+        )
+        let ioUnsafeParsed = SkyLightDisplayModeDescription.parse(bytes: ioUnsafeBytes)
+        XCTAssertEqual(ioUnsafeParsed?.modeID, 100)
+        XCTAssertEqual(ioUnsafeParsed?.isUsableForDesktopGUI, false)
     }
 
     func testRejectsTruncatedSkyLightModeDescriptionBuffer() {

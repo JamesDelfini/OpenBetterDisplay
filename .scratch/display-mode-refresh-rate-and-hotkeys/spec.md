@@ -8,7 +8,7 @@ Users running macOS with built-in and external monitors face three daily frictio
 
 1. **Limited Display Mode visibility and filtering**: A single resolution slider hides critical mode attributes—such as whether a mode is **HiDPI** or **LoDPI**, its aspect ratio, refresh rate, and color depth (`10bit` vs `8bit`)—and provides no way to filter across hundreds of macOS-exposed modes or save frequently used **Display Modes** for one-click switching.
 2. **No Refresh Rate switching**: Users on 120Hz or variable-refresh monitors cannot quickly view or switch refresh rates (including **Variable Refresh Rate** ranges and hardware-exposed **NTSC Refresh Rates**) for their current logical resolution without leaving the menu bar.
-3. **No global Brightness Hotkeys for external displays**: Pressing `F1` / `F2` (or hardware brightness keys `☀️-` / `☀️+`) only adjusts the **Built-in Display** via macOS, leaving external monitors untouched or showing a disabled system HUD. Moreover, users who flip macOS between media brightness keys and standard `F1`–`F12` function keys have no in-app visibility into why `F1`/`F2` vs `Fn+F1`/`Fn+F2` behaves differently or whether Accessibility access is active.
+3. **No global Brightness Hotkeys for external displays**: Pressing `F1` / `F2` (or **Brightness Hotkeys** `☀️-` / `☀️+`) only adjusts the **Built-in Display** via macOS, leaving external monitors untouched or showing the macOS unavailable HUD. Moreover, users who flip macOS between media **Brightness Hotkeys** and standard `F1`–`F12` function keys have no in-app visibility into why `F1`/`F2` vs `Fn+F1`/`Fn+F2` behaves differently or whether Accessibility access is active.
 
 ## Solution
 
@@ -42,9 +42,9 @@ Upgrade OpenBetterDisplay's menu bar popover and core coordinator with three int
 20. As a macOS user, I want assigned **Favorite Modes** displayed in a **Favorites** section above **Default and native modes** for one-click switching, so that my top modes are always first in line.
 21. As a macOS user, I want **Favorite Modes** persisted per physical display and matched by mode attributes if macOS reassigns `modeID` across reconnects, so that favorites remain reliable after unplugging or sleep.
 22. As a macOS user, I want the **Refresh Rate** picker to show all refresh rates exposed by macOS for my current logical resolution and **HiDPI**/**LoDPI** tier, so that changing frame rate preserves my current screen scaling.
-23. As a macOS user, I want **Variable Refresh Rate** modes (such as `48–120Hz (Variable)`) shown clearly at the top of **Refresh Rate** whenever macOS exposes VRR for that display, so that I can toggle adaptive sync easily.
+23. As a macOS user, I want **Variable Refresh Rate** modes (such as `48–120Hz (Variable)`) shown clearly at the top of **Refresh Rate** whenever macOS exposes **Variable Refresh Rate** for that display, so that I can enable or disable **Variable Refresh Rate** easily.
 24. As a macOS user, I want **NTSC Refresh Rates** (such as `119.88Hz`, `59.94Hz`, `47.95Hz`, `29.97Hz`, `23.98Hz`) shown in a separated sub-section inside **Refresh Rate** whenever macOS exposes them for that display, without injecting unexposed timings that vanish on mode changes, so that video-cadence options stay truthful to the hardware.
-25. As a macOS user, I want **Brightness Hotkeys** to bind macOS brightness media keys (`☀️-` / `☀️+`) by default, so that standard Mac top-row keys (or `Fn+F1` / `Fn+F2` when flipped) control display brightness out of the box.
+25. As a macOS user, I want **Brightness Hotkeys** to bind macOS media keys (`☀️-` / `☀️+`) by default, so that standard Mac top-row keys (or `Fn+F1` / `Fn+F2` when flipped) control display brightness out of the box.
 26. As a macOS user, I want an opt-in **"Bind literal F1 / F2"** toggle inside the footer **Hotkeys** section, so that when I use an external PC keyboard or flip macOS to standard function keys, pressing `F1` decreases brightness and pressing `F2` increases it directly without holding `Fn` (while keeping `F1`/`F2` free for other apps when disabled).
 27. As a macOS user, I want **Brightness Hotkeys** to step brightness by `1/16` (`6.25%`) per press and finely by `1/64` (`1.56%`) when holding `⌥⇧`, including smooth key-repeat while held, so that stepping matches macOS's native tactile cadence.
 28. As a macOS user, I want **Brightness Hotkeys** to default to **Follow Mouse Cursor** as the **Target Display** (adjusting whichever **Enabled Display** contains the pointer, falling back to the **Main Display**), so that whichever monitor I am actively working on responds immediately.
@@ -60,7 +60,7 @@ Upgrade OpenBetterDisplay's menu bar popover and core coordinator with three int
 ### 1. Enriched Display Mode & Refresh Rate Model (`OpenBetterDisplayCore`)
 
 - Extend raw mode representations and UI-facing mode options to carry all macOS-exposed attributes required by the **Display Mode** browser and **Refresh Rate** picker:
-  - Color depth (`bitsPerSample`, distinguishing `10bit` vs `8bit` from SkyLight mode descriptions and `CGDisplayModeCopyPixelEncoding`).
+  - Color depth (`bitsPerSample`, distinguishing `10bit` vs `8bit` from SkyLight mode descriptions at `+0x1C` with `+0x30` fallback).
   - Mode classification flags: **Default Mode** (`kDisplayModeDefaultFlag`), **Native Mode** (`kDisplayModeNativeFlag`), hardware-safety/stretched flags, and sub-720p filtering (`height >= 720` and usable/safe for desktop).
   - Refresh rate range metadata: **Variable Refresh Rate** indicator and minimum/maximum Hz (e.g. `48–120Hz` / `24–120Hz`) alongside exact nominal refresh rate so integer rates and fractional **NTSC Refresh Rates** (`119.88Hz`, `59.94Hz`, `47.95Hz`, `29.97Hz`, `23.98Hz`) remain distinct and recognizable.
   - Display geometry/bounds on raw display descriptors (`CGDisplayBounds`) so pointer-in-display **Target Display** lookup works cleanly without leaking AppKit screen objects into Core state.
@@ -72,7 +72,7 @@ Upgrade OpenBetterDisplay's menu bar popover and core coordinator with three int
   - Replace slider preview/commit mode tracking with immediate **Display Mode** selection and per-display **Refresh Rate** selection (`selectDisplayMode` / `selectRefreshRate` matching active logical resolution + scaling tier).
   - Maintain single-open accordion state across the entire popover (`expandedSection` enum covering per-display `displayMode`, `refreshRate`, `mainDisplay`, and footer `hotkeys`), clearing automatically on display disconnect, unplug, or popover close.
   - Manage per-display **Display Mode** custom filter state:
-    - Derive available filter chip options dynamically from each display's safe `>= 720p` modes (aspect ratios, refresh rates including VRR/NTSC, bit depths, **HiDPI** / **LoDPI**).
+    - Derive available filter chip options dynamically from each display's safe `>= 720p` modes (aspect ratios, refresh rates including **Variable Refresh Rate** / **NTSC Refresh Rates**, bit depths, **HiDPI** / **LoDPI**).
     - When uncustomized, default filter tracks the display's native aspect ratio, active refresh rate, active bit depth, and preferred **HiDPI** / **LoDPI** tier.
     - When customized via chip selection (plain click = solo-select within group; `⇧ Shift`+click = multi-select) or `Show All`, persist the customized filter per physical display key until `Reset Default`.
   - Manage 5 **Favorite Mode** slots (`1`–`5`) per physical display key:
@@ -95,7 +95,7 @@ Upgrade OpenBetterDisplay's menu bar popover and core coordinator with three int
 
 ### 4. Popover SwiftUI Views (`OpenBetterDisplayUI`)
 
-- Update display card layout: `headerPill` → `BrightnessControlRow` → `DisplayModeSection` (collapsed pill + expanded scrollable panel with `Favorites` + `Manage...`, `Default and native modes`, `Modes matching custom filter` + `Filter...` chips) → `RefreshRateSection` (collapsed pill + expanded list with VRR, integer, and exposed NTSC sub-section) → bottom `⌄` chevron for `MainDisplayDrawerRow`.
+- Update display card layout: `headerPill` → `BrightnessControlRow` → `DisplayModeSection` (collapsed pill + expanded scrollable panel with `Favorites` + `Manage...`, `Default and native modes`, `Modes matching custom filter` + `Filter...` chips) → `RefreshRateSection` (collapsed pill + expanded list with **Variable Refresh Rate**, integer, and exposed **NTSC Refresh Rate** sub-section) → bottom `⌄` chevron for `MainDisplayDrawerRow`.
 - Add footer collapsible `HotkeysSection` above `Launch at Login` containing **Target Display** picker, **Brightness Media Keys** / **Bind literal F1 / F2** toggles, and the live **Fn-Key Mode** + **Accessibility Permission** checker.
 - Remove `ResolutionControlRow` and `SteppedResolutionSlider`. Update `PopoverPreview` fixtures/options to cover expanded **Display Mode** (with filter/manage subviews), **Refresh Rate**, and **Hotkeys** panels for visual regression inspection.
 
@@ -114,11 +114,12 @@ Upgrade OpenBetterDisplay's menu bar popover and core coordinator with three int
 - `Tools` menu (`Displays And Virtual Screens`, `Video Filter Window`, `System Colors`, `Check for Updates`), top toolbar icon bar, and `Get BetterDisplay Pro` / commercial licensing UI.
 - Synthetic `"Show Custom Scaled Resolutions"` creation, virtual displays (`CGVirtualDisplay`), and EDID overrides.
 - Unexposed **NTSC Refresh Rate** timing injection, `Configuration Protection` mode-enforcement daemons, and `⌥ Option`-hold live refresh rate measurement.
-- Arbitrary custom global shortcut recorder beyond `☀️-`/`☀️+` brightness media keys and opt-in `F1`/`F2` (`+ ⌥⇧` fine step).
+- Arbitrary custom global shortcut recorder beyond `☀️-`/`☀️+` media **Brightness Hotkeys** and opt-in `F1`/`F2` (`+ ⌥⇧` fine step).
 
 ## Further Notes
 
 - Canonical terminology in this specification matches `GLOSSARY.md` (**Main Display**, **Main Display Badge**, **Enabled Display**, **Disconnected Display**, **Display Mode**, **HiDPI**, **LoDPI**, **Default Mode**, **Native Mode**, **Favorite Mode**, **Variable Refresh Rate**, **NTSC Refresh Rate**, **Brightness Hotkey**, **Target Display**).
 - Design trade-offs are documented in **ADR-0001** (Hybrid Brightness Hotkey Capture and Fn-Mode Checker) and **ADR-0002** (macOS-Exposed Display Modes Only).
+- `CGDisplayModeCopyPixelEncoding` (`CoreGraphics`) is a hardcoded 8-bit stub on macOS 26 (see `docs/macos-private-apis.md`), so bit depth is parsed from SkyLight mode descriptions (`+0x1C` with `+0x30` fallback).
 - When building locally via `make app` with ad-hoc code signing, macOS TCC invalidates prior Accessibility trust on binary changes until re-granted in System Settings or signed with a stable developer certificate; the live Accessibility checker in the footer **Hotkeys** section makes this state immediately visible.
 - All SwiftUI popover updates should be verified via `make preview` and visual inspection alongside `make check`.

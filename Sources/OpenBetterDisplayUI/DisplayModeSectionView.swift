@@ -4,7 +4,6 @@ import SwiftUI
 public struct DisplayModeSectionView: View {
     let display: DisplayState
     @ObservedObject var coordinator: DisplayCoordinator
-    @State private var isHeaderHovering = false
     @State private var isFilterButtonHovering = false
     @State private var measuredContentHeight: CGFloat?
 
@@ -25,63 +24,28 @@ public struct DisplayModeSectionView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            pillHeader
-
-            if isExpanded {
-                Divider()
-                    .overlay(Color.white.opacity(0.09))
-                    .padding(.horizontal, 8)
-
-                browserList
-            }
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(isExpanded ? 0.08 : (isHeaderHovering ? 0.10 : 0.06)))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(
-                            Color.white.opacity(isExpanded ? 0.15 : 0.10),
-                            lineWidth: 0.8
-                        )
-                )
-        )
-    }
-
-    private var pillHeader: some View {
-        Button {
+        CollapsibleSectionCard(
+            isExpanded: isExpanded,
+            helpText: "Select Display Mode for \(display.name)",
+            accessibilityLabel: "Display Mode, \(display.resolutionLabel.isEmpty ? "unavailable" : display.resolutionLabel)"
+        ) {
             coordinator.toggleExpandedSection(.displayMode(display.displayID))
-        } label: {
-            HStack(spacing: 8) {
-                modeIcon
+        } header: {
+            modeIcon
 
-                Text("Display Mode")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.90))
+            Text("Display Mode")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.90))
 
-                Spacer(minLength: 6)
+            Spacer(minLength: 6)
 
-                Text(display.resolutionLabel.isEmpty ? "—" : display.resolutionLabel)
-                    .font(.system(size: 12, weight: .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.66))
-
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .frame(width: 10)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .contentShape(Rectangle())
+            Text(display.resolutionLabel.isEmpty ? "—" : display.resolutionLabel)
+                .font(.system(size: 12, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.66))
+        } content: {
+            browserList
         }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            isHeaderHovering = hovering
-        }
-        .help("Select Display Mode for \(display.name)")
-        .accessibilityLabel("Display Mode, \(display.resolutionLabel.isEmpty ? "unavailable" : display.resolutionLabel)")
     }
 
     private var modeIcon: some View {
@@ -222,14 +186,14 @@ public struct DisplayModeSectionView: View {
                     .background(
                         GeometryReader { geometry in
                             Color.clear.preference(
-                                key: DisplayModeListHeightPreferenceKey.self,
+                                key: SectionListHeightPreferenceKey.self,
                                 value: geometry.size.height
                             )
                         }
                     )
             }
             .frame(height: resolvedModesListHeight)
-            .onPreferenceChange(DisplayModeListHeightPreferenceKey.self) { height in
+            .onPreferenceChange(SectionListHeightPreferenceKey.self) { height in
                 if height > 0 {
                     measuredContentHeight = height
                 }
@@ -426,16 +390,10 @@ struct DisplayModeRowView: View {
             .padding(.horizontal, 4)
             .padding(.vertical, 4)
             .opacity(isUnavailable ? 0.45 : 1.0)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(rowBackgroundColor)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(
-                                isSelected ? Color.accentColor.opacity(0.45) : Color.clear,
-                                lineWidth: 0.7
-                            )
-                    )
+            .selectableRowBackground(
+                isSelected: isSelected,
+                isHovering: isHovering,
+                isInteractive: !isUnavailable
             )
             .contentShape(Rectangle())
         }
@@ -443,13 +401,6 @@ struct DisplayModeRowView: View {
         .onHover { hovering in
             isHovering = hovering
         }
-    }
-
-    private var rowBackgroundColor: Color {
-        if isSelected {
-            return Color.accentColor.opacity(isHovering ? 0.34 : 0.24)
-        }
-        return Color.white.opacity(isHovering && !isUnavailable ? 0.10 : 0.0)
     }
 }
 
@@ -477,13 +428,5 @@ struct DisplayModeBadgeView: View {
         } else {
             badge
         }
-    }
-}
-
-private struct DisplayModeListHeightPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }

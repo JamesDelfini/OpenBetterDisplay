@@ -4,7 +4,14 @@ import Foundation
 @MainActor
 public final class DisplayCoordinator: ObservableObject {
     @Published public private(set) var displays: [DisplayState] = []
-    @Published public private(set) var expandedSection: ExpandedPopoverSection?
+    @Published public private(set) var expandedSection: ExpandedPopoverSection? {
+        didSet {
+            if let managingID = managingFavoritesDisplayID, expandedSection != .displayMode(managingID) {
+                managingFavoritesDisplayID = nil
+            }
+        }
+    }
+    @Published public private(set) var managingFavoritesDisplayID: UInt32?
     public var onRequestPopoverClose: (@MainActor () -> Void)?
 
     private struct DDCThrottleState {
@@ -20,6 +27,7 @@ public final class DisplayCoordinator: ObservableObject {
 
     private let driver: DisplayDriver
     private let brightnessStore: BrightnessPersistence
+    private let favoriteModesStore: FavoriteModesPersistence
     private let ddcThrottleInterval: TimeInterval
     private let writeScheduler: BrightnessWriteScheduling
     private var lastKnownRawDisplays: [UInt32: RawDisplayInfo] = [:]
@@ -35,11 +43,13 @@ public final class DisplayCoordinator: ObservableObject {
     public init(
         driver: DisplayDriver,
         brightnessStore: BrightnessPersistence = UserDefaultsBrightnessStore(),
+        favoriteModesStore: FavoriteModesPersistence = UserDefaultsFavoriteModesStore(),
         ddcThrottleInterval: TimeInterval = 0.06,
         writeScheduler: BrightnessWriteScheduling? = nil
     ) {
         self.driver = driver
         self.brightnessStore = brightnessStore
+        self.favoriteModesStore = favoriteModesStore
         self.ddcThrottleInterval = max(0, ddcThrottleInterval)
         self.writeScheduler = writeScheduler ?? MainQueueBrightnessWriteScheduler()
         refreshDisplays()
@@ -93,6 +103,20 @@ public final class DisplayCoordinator: ObservableObject {
 
     public func handlePopoverDidClose() {
         expandedSection = nil
+    }
+
+    public func toggleManageFavorites(for displayID: UInt32) {
+        guard let display = displays.first(where: { $0.displayID == displayID }),
+            display.isEnabled
+        else {
+            return
+        }
+        if managingFavoritesDisplayID == displayID {
+            managingFavoritesDisplayID = nil
+            return
+        }
+        expandedSection = .displayMode(displayID)
+        managingFavoritesDisplayID = displayID
     }
 
     public func setDisplayEnabled(_ displayID: UInt32, enabled: Bool) {
@@ -244,6 +268,11 @@ public final class DisplayCoordinator: ObservableObject {
 
             let persistenceKey = Self.persistenceKey(for: raw)
             updatedKeys[raw.displayID] = persistenceKey
+            let savedFavoriteRecords = favoriteModesStore.favoriteModes(forKey: persistenceKey)
+            let favoriteModes = DisplayModeFilter.resolveFavoriteModes(
+                from: savedFavoriteRecords,
+                availableModes: availableModes
+            )
 
             let (brightness, backend) = resolveBrightnessState(
                 for: raw,
@@ -269,6 +298,7 @@ public final class DisplayCoordinator: ObservableObject {
                 availableModes: availableModes,
                 defaultMode: defaultMode,
                 nativeMode: nativeMode,
+                favoriteModes: favoriteModes,
                 currentModeID: raw.currentModeID,
                 currentModeOption: currentModeOption
             )
@@ -337,15 +367,12 @@ public final class DisplayCoordinator: ObservableObject {
         }
 
         let display = displays[index]
-        let isKnownMode =
-            display.availableModes.contains(where: { $0.modeID == modeID })
-            || display.defaultMode?.modeID == modeID
-            || display.nativeMode?.modeID == modeID
-        if !display.availableModes.isEmpty, !isKnownMode {
+        let knownTargetOption = resolveKnownModeOption(for: display, modeID: modeID)
+        if !display.availableModes.isEmpty, knownTargetOption == nil {
             return
         }
 
-        applyDisplayModeSwitch(at: index, modeID: modeID)
+        applyDisplayModeSwitch(at: index, modeID: modeID, knownOption: knownTargetOption)
     }
 
     public func selectRefreshRate(_ displayID: UInt32, modeID: Int32) {
@@ -373,10 +400,11 @@ public final class DisplayCoordinator: ObservableObject {
             return
         }
 
-        applyDisplayModeSwitch(at: index, modeID: modeID)
+        let knownOption = resolveKnownModeOption(for: display, modeID: modeID)
+        applyDisplayModeSwitch(at: index, modeID: modeID, knownOption: knownOption)
     }
 
-    private func applyDisplayModeSwitch(at index: Int, modeID: Int32) {
+    private func applyDisplayModeSwitch(at index: Int, modeID: Int32, knownOption: DisplayModeOption?) {
         let display = displays[index]
         let displayID = display.displayID
         guard modeID != display.currentModeID else {
@@ -389,6 +417,7 @@ public final class DisplayCoordinator: ObservableObject {
             displays[index].currentModeOption = resolveSelectedModeOption(
                 for: display,
                 modeID: modeID,
+                knownOption: knownOption,
                 raw: lastKnownRawDisplays[displayID]
             )
             lastKnownRawDisplays[displayID]?.currentModeID = modeID
@@ -397,11 +426,86 @@ public final class DisplayCoordinator: ObservableObject {
         }
     }
 
-    private func resolveSelectedModeOption(
-        for display: DisplayState,
-        modeID: Int32,
-        raw: RawDisplayInfo?
-    ) -> DisplayModeOption? {
+    public func assignCurrentModeToFavorite(_ displayID: UInt32, slot: Int) {
+        guard let display = displays.first(where: { $0.displayID == displayID }),
+            display.isEnabled,
+            let currentMode = display.currentModeOption
+        else {
+            return
+        }
+        assignFavoriteModeOption(currentMode, for: displayID, slot: slot)
+    }
+
+    public func assignFavoriteMode(_ displayID: UInt32, modeID: Int32, slot: Int) {
+        guard let display = displays.first(where: { $0.displayID == displayID }),
+            display.isEnabled,
+            let modeOption = resolveKnownModeOption(for: display, modeID: modeID)
+                ?? (display.currentModeOption?.modeID == modeID ? display.currentModeOption : nil)
+        else {
+            return
+        }
+        assignFavoriteModeOption(modeOption, for: displayID, slot: slot)
+    }
+
+    public func clearFavoriteMode(_ displayID: UInt32, slot: Int) {
+        guard UserDefaultsFavoriteModesStore.validSlotRange.contains(slot) else {
+            return
+        }
+        updateFavoriteSlots(for: displayID) { slots, _ in
+            slots.removeValue(forKey: slot)
+        }
+    }
+
+    public func removeModeFromFavorites(_ displayID: UInt32, modeID: Int32) {
+        updateFavoriteSlots(for: displayID) { slots, display in
+            let matchingSlots = display.favoriteModes.filter { $0.matches(modeID: modeID) }.map(\.slot)
+            for slot in matchingSlots {
+                slots.removeValue(forKey: slot)
+            }
+        }
+    }
+
+    public func selectFavoriteMode(_ displayID: UInt32, slot: Int) {
+        guard UserDefaultsFavoriteModesStore.validSlotRange.contains(slot),
+            let display = displays.first(where: { $0.displayID == displayID }),
+            display.isEnabled,
+            let resolvedMode = display.favoriteMode(forSlot: slot)?.resolvedMode
+        else {
+            return
+        }
+        selectDisplayMode(displayID, modeID: resolvedMode.modeID)
+    }
+
+    private func assignFavoriteModeOption(_ modeOption: DisplayModeOption, for displayID: UInt32, slot: Int) {
+        guard UserDefaultsFavoriteModesStore.validSlotRange.contains(slot) else {
+            return
+        }
+        updateFavoriteSlots(for: displayID) { slots, _ in
+            slots[slot] = FavoriteModeRecord(mode: modeOption)
+        }
+    }
+
+    private func updateFavoriteSlots(
+        for displayID: UInt32,
+        mutate: (inout [Int: FavoriteModeRecord], DisplayState) -> Void
+    ) {
+        guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
+            displays[index].isEnabled,
+            let persistenceKey = persistenceKeysByDisplayID[displayID]
+        else {
+            return
+        }
+
+        var slots = favoriteModesStore.favoriteModes(forKey: persistenceKey)
+        mutate(&slots, displays[index])
+        favoriteModesStore.setFavoriteModes(slots, forKey: persistenceKey)
+        displays[index].favoriteModes = DisplayModeFilter.resolveFavoriteModes(
+            from: slots,
+            availableModes: displays[index].availableModes
+        )
+    }
+
+    private func resolveKnownModeOption(for display: DisplayState, modeID: Int32) -> DisplayModeOption? {
         if let option = display.availableModes.first(where: { $0.modeID == modeID }) {
             return option
         }
@@ -410,6 +514,18 @@ public final class DisplayCoordinator: ObservableObject {
         }
         if display.nativeMode?.modeID == modeID {
             return display.nativeMode
+        }
+        return nil
+    }
+
+    private func resolveSelectedModeOption(
+        for display: DisplayState,
+        modeID: Int32,
+        knownOption: DisplayModeOption?,
+        raw: RawDisplayInfo?
+    ) -> DisplayModeOption? {
+        if let knownOption {
+            return knownOption
         }
         if let rawMode = raw?.modes.first(where: { $0.modeID == modeID }) {
             return DisplayModeFilter.makeModeOption(mode: rawMode)

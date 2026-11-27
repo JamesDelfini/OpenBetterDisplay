@@ -103,13 +103,15 @@ public struct DisplayModeSectionView: View {
         } else {
             pinnedCount = hasPinned ? 1 : 0
         }
-        let sections = (hasPinned ? 1 : 0) + 1
-        let totalRows = pinnedCount + max(1, display.availableModes.count)
+        let favoritesRows = max(1, display.favoriteModes.count)
+        let manageHeight: CGFloat = coordinator.managingFavoritesDisplayID == display.displayID ? 56.0 : 0.0
+        let sections = 1 + (hasPinned ? 1 : 0) + 1
+        let totalRows = favoritesRows + pinnedCount + max(1, display.availableModes.count)
         let rowHeights = CGFloat(totalRows) * 23.5
         let rowSpacing = CGFloat(max(0, totalRows - sections)) * 3.0
         let headerHeights = CGFloat(sections) * 18.0
-        let dividerAndPadding: CGFloat = (hasPinned ? 15.0 : 0.0) + 16.0
-        return ceil(rowHeights + rowSpacing + headerHeights + dividerAndPadding)
+        let dividerAndPadding: CGFloat = 15.0 + (hasPinned ? 15.0 : 0.0) + 16.0
+        return ceil(rowHeights + rowSpacing + headerHeights + dividerAndPadding + manageHeight)
     }
 
     private var browserList: some View {
@@ -136,6 +138,12 @@ public struct DisplayModeSectionView: View {
     @ViewBuilder
     private var modeListContent: some View {
         VStack(alignment: .leading, spacing: 6) {
+            DisplayModeFavoritesView(display: display, coordinator: coordinator)
+
+            Divider()
+                .overlay(Color.white.opacity(0.08))
+                .padding(.vertical, 1)
+
             let hasDefaultOrNative = display.defaultMode != nil || display.nativeMode != nil
             if hasDefaultOrNative {
                 defaultAndNativeSection
@@ -172,6 +180,7 @@ public struct DisplayModeSectionView: View {
                 ) {
                     coordinator.selectDisplayMode(display.displayID, modeID: defaultMode.modeID)
                 }
+                .displayModeFavoriteContextMenu(display: display, modeID: defaultMode.modeID, coordinator: coordinator)
             } else {
                 if let defaultMode = display.defaultMode {
                     DisplayModeRowView(
@@ -181,6 +190,7 @@ public struct DisplayModeSectionView: View {
                     ) {
                         coordinator.selectDisplayMode(display.displayID, modeID: defaultMode.modeID)
                     }
+                    .displayModeFavoriteContextMenu(display: display, modeID: defaultMode.modeID, coordinator: coordinator)
                 }
                 if let nativeMode = display.nativeMode {
                     DisplayModeRowView(
@@ -190,6 +200,7 @@ public struct DisplayModeSectionView: View {
                     ) {
                         coordinator.selectDisplayMode(display.displayID, modeID: nativeMode.modeID)
                     }
+                    .displayModeFavoriteContextMenu(display: display, modeID: nativeMode.modeID, coordinator: coordinator)
                 }
             }
         }
@@ -217,13 +228,14 @@ public struct DisplayModeSectionView: View {
                     ) {
                         coordinator.selectDisplayMode(display.displayID, modeID: mode.modeID)
                     }
+                    .displayModeFavoriteContextMenu(display: display, modeID: mode.modeID, coordinator: coordinator)
                 }
             }
         }
     }
 }
 
-private enum DisplayModePinnedMarker: Hashable {
+enum DisplayModePinnedMarker: Hashable {
     case defaultMode
     case nativeMode
 
@@ -246,10 +258,12 @@ private enum DisplayModePinnedMarker: Hashable {
     }
 }
 
-private struct DisplayModeRowView: View {
+struct DisplayModeRowView: View {
     let mode: DisplayModeOption
     let isSelected: Bool
     let pinnedMarkers: [DisplayModePinnedMarker]
+    var favoriteSlot: Int? = nil
+    var isUnavailable: Bool = false
     let action: () -> Void
     @State private var isHovering = false
 
@@ -261,6 +275,19 @@ private struct DisplayModeRowView: View {
                     .foregroundStyle(Color.white.opacity(0.95))
                     .opacity(isSelected ? 1 : 0)
                     .frame(width: 11, alignment: .center)
+
+                if let favoriteSlot {
+                    Text("\(favoriteSlot)")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.white.opacity(0.92))
+                        .frame(width: 14, height: 14, alignment: .center)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.32))
+                        )
+                        .help("Favorite \(favoriteSlot)")
+                }
 
                 ForEach(pinnedMarkers, id: \.self) { marker in
                     Text(marker.symbol)
@@ -279,6 +306,10 @@ private struct DisplayModeRowView: View {
                 Spacer(minLength: 4)
 
                 HStack(spacing: 3) {
+                    if isUnavailable {
+                        DisplayModeBadgeView(text: "Unavailable")
+                    }
+
                     if mode.isHiDPI {
                         DisplayModeBadgeView(
                             text: "✦",
@@ -301,6 +332,7 @@ private struct DisplayModeRowView: View {
             }
             .padding(.horizontal, 5)
             .padding(.vertical, 4)
+            .opacity(isUnavailable ? 0.45 : 1.0)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(rowBackgroundColor)
@@ -324,11 +356,11 @@ private struct DisplayModeRowView: View {
         if isSelected {
             return Color.accentColor.opacity(isHovering ? 0.34 : 0.24)
         }
-        return Color.white.opacity(isHovering ? 0.10 : 0.0)
+        return Color.white.opacity(isHovering && !isUnavailable ? 0.10 : 0.0)
     }
 }
 
-private struct DisplayModeBadgeView: View {
+struct DisplayModeBadgeView: View {
     let text: String
     var isEmphasized: Bool = false
     var helpText: String?
@@ -345,6 +377,7 @@ private struct DisplayModeBadgeView: View {
                     .fill(isEmphasized ? Color.accentColor.opacity(0.24) : Color.white.opacity(0.09))
             )
             .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
 
         if let helpText {
             badge.help(helpText)

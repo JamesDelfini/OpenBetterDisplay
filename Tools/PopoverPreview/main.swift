@@ -75,6 +75,18 @@ private final class PreviewBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     func stop() {}
 }
 
+private final class PreviewFavoriteModesStore: FavoriteModesPersistence, @unchecked Sendable {
+    private var slotsByKey: [String: [Int: FavoriteModeRecord]] = [:]
+
+    func favoriteModes(forKey key: String) -> [Int: FavoriteModeRecord] {
+        slotsByKey[key] ?? [:]
+    }
+
+    func setFavoriteModes(_ slots: [Int: FavoriteModeRecord], forKey key: String) {
+        slotsByKey[key] = slots
+    }
+}
+
 @MainActor
 private func renderPreview() {
     let args = Array(CommandLine.arguments.dropFirst())
@@ -82,6 +94,7 @@ private func renderPreview() {
     var expandMainID: UInt32?
     var expandModeID: UInt32?
     var expandHotkeys = false
+    var expandManageID: UInt32?
     var disconnectID: UInt32?
 
     var index = 0
@@ -96,6 +109,14 @@ private func renderPreview() {
         } else if arg == "--expanded-hotkeys" {
             expandHotkeys = true
             index += 1
+        } else if arg == "--expanded-manage" {
+            if index + 1 < args.count, let id = UInt32(args[index + 1]) {
+                expandManageID = id
+                index += 2
+            } else {
+                expandManageID = 30
+                index += 1
+            }
         } else if arg == "--disconnect", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             disconnectID = id
             index += 2
@@ -210,6 +231,7 @@ private func renderPreview() {
         ]
     )
 
+    let favoriteStore = PreviewFavoriteModesStore()
     let hotkeyGateway = PreviewBrightnessHotkeyGateway(
         checkerStatus: KeyboardCheckerStatus(
             functionKeyMode: .standardFunctionKeys,
@@ -219,6 +241,7 @@ private func renderPreview() {
     let coordinator = DisplayCoordinator(
         driver: driver,
         brightnessStore: PreviewBrightnessStore(),
+        favoriteModesStore: favoriteStore,
         ddcThrottleInterval: 0,
         hotkeyGateway: hotkeyGateway,
         hotkeyPreferencesStore: PreviewHotkeyPreferencesStore()
@@ -230,6 +253,14 @@ private func renderPreview() {
 
     if expandHotkeys {
         coordinator.toggleExpandedSection(.hotkeys)
+    } else if let expandManageID {
+        if let display = coordinator.displays.first(where: { $0.displayID == expandManageID }) {
+            coordinator.assignCurrentModeToFavorite(expandManageID, slot: 1)
+            if let alternate = display.availableModes.first(where: { $0.modeID != display.currentModeID }) {
+                coordinator.assignFavoriteMode(expandManageID, modeID: alternate.modeID, slot: 3)
+            }
+        }
+        coordinator.toggleManageFavorites(for: expandManageID)
     } else if let expandModeID {
         coordinator.toggleExpandedSection(.displayMode(expandModeID))
     } else if let expandMainID {

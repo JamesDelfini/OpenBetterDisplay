@@ -59,6 +59,9 @@ public struct DisplayPopoverView: View {
                 .padding(.bottom, 4)
             }
 
+            HotkeysSectionView(coordinator: coordinator)
+                .padding(.bottom, 2)
+
             HStack(spacing: 10) {
                 ZStack {
                     Circle()

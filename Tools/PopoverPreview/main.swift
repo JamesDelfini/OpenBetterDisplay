@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import OpenBetterDisplayCore
 import OpenBetterDisplayUI
@@ -51,12 +52,36 @@ private final class PreviewBrightnessStore: BrightnessPersistence, @unchecked Se
     func setBrightness(_ level: Double, forKey key: String) {}
 }
 
+private final class PreviewHotkeyPreferencesStore: HotkeyPreferencesPersistence, @unchecked Sendable {
+    func loadPreferences() -> HotkeyPreferences? { nil }
+    func savePreferences(_ preferences: HotkeyPreferences) {}
+}
+
+@MainActor
+private final class PreviewBrightnessHotkeyGateway: BrightnessHotkeyGateway {
+    var onBrightnessKeyEvent: (@MainActor (BrightnessKeyEvent) -> Bool)?
+    var onCheckerStatusDidChange: (@MainActor () -> Void)?
+    private let checkerStatus: KeyboardCheckerStatus
+
+    init(checkerStatus: KeyboardCheckerStatus) {
+        self.checkerStatus = checkerStatus
+    }
+
+    func applyPreferences(_ preferences: HotkeyPreferences) {}
+    func readCheckerStatus() -> KeyboardCheckerStatus { checkerStatus }
+    func currentPointerLocation() -> CGPoint? { nil }
+    func requestAccessibilityPermission() {}
+    func openKeyboardSettings() {}
+    func stop() {}
+}
+
 @MainActor
 private func renderPreview() {
     let args = Array(CommandLine.arguments.dropFirst())
     var outputPath = "/tmp/openbetterdisplay-preview.png"
     var expandMainID: UInt32?
     var expandModeID: UInt32?
+    var expandHotkeys = false
     var disconnectID: UInt32?
 
     var index = 0
@@ -68,6 +93,9 @@ private func renderPreview() {
         } else if arg == "--expanded-mode", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             expandModeID = id
             index += 2
+        } else if arg == "--expanded-hotkeys" {
+            expandHotkeys = true
+            index += 1
         } else if arg == "--disconnect", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             disconnectID = id
             index += 2
@@ -111,7 +139,8 @@ private func renderPreview() {
                     RawDisplayMode(
                         modeID: 14, width: 3024, height: 1964, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0, isNative: true,
                         bitsPerSample: 10)
-                ]
+                ],
+                bounds: CGRect(x: -1512, y: 0, width: 1512, height: 982)
             ),
             RawDisplayInfo(
                 displayID: 20,
@@ -135,7 +164,8 @@ private func renderPreview() {
                         bitsPerSample: 8,
                         isDefault: true
                     )
-                ]
+                ],
+                bounds: CGRect(x: 2560, y: 0, width: 1920, height: 1080)
             ),
             RawDisplayInfo(
                 displayID: 30,
@@ -169,7 +199,8 @@ private func renderPreview() {
                         modeID: 39, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60.0, bitsPerSample: 8),
                     RawDisplayMode(
                         modeID: 40, width: 960, height: 540, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 60.0, bitsPerSample: 8)
-                ]
+                ],
+                bounds: CGRect(x: 0, y: 0, width: 2560, height: 1440)
             )
         ],
         brightnessByID: [
@@ -179,17 +210,27 @@ private func renderPreview() {
         ]
     )
 
+    let hotkeyGateway = PreviewBrightnessHotkeyGateway(
+        checkerStatus: KeyboardCheckerStatus(
+            functionKeyMode: .standardFunctionKeys,
+            isAccessibilityTrusted: false
+        )
+    )
     let coordinator = DisplayCoordinator(
         driver: driver,
         brightnessStore: PreviewBrightnessStore(),
-        ddcThrottleInterval: 0
+        ddcThrottleInterval: 0,
+        hotkeyGateway: hotkeyGateway,
+        hotkeyPreferencesStore: PreviewHotkeyPreferencesStore()
     )
 
     if let disconnectID {
         coordinator.setDisplayEnabled(disconnectID, enabled: false)
     }
 
-    if let expandModeID {
+    if expandHotkeys {
+        coordinator.toggleExpandedSection(.hotkeys)
+    } else if let expandModeID {
         coordinator.toggleExpandedSection(.displayMode(expandModeID))
     } else if let expandMainID {
         coordinator.toggleExpandedSection(.mainDisplay(expandMainID))

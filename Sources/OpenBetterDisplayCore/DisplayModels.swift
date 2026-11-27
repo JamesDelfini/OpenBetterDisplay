@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 public enum BrightnessBackendUsed: String, Equatable, Sendable {
@@ -67,6 +68,7 @@ public struct RawDisplayInfo: Equatable, Sendable {
     public var serialNumber: UInt32
     public var currentModeID: Int32
     public var modes: [RawDisplayMode]
+    public var bounds: CGRect
 
     public init(
         displayID: UInt32,
@@ -78,7 +80,8 @@ public struct RawDisplayInfo: Equatable, Sendable {
         modelID: UInt32 = 0,
         serialNumber: UInt32 = 0,
         currentModeID: Int32 = 0,
-        modes: [RawDisplayMode] = []
+        modes: [RawDisplayMode] = [],
+        bounds: CGRect = .zero
     ) {
         self.displayID = displayID
         self.name = name
@@ -90,6 +93,7 @@ public struct RawDisplayInfo: Equatable, Sendable {
         self.serialNumber = serialNumber
         self.currentModeID = currentModeID
         self.modes = modes
+        self.bounds = bounds
     }
 }
 
@@ -188,6 +192,7 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
     public var nativeMode: DisplayModeOption?
     public var currentModeID: Int32
     public var currentModeOption: DisplayModeOption?
+    public var bounds: CGRect
 
     public var id: UInt32 { displayID }
 
@@ -223,7 +228,8 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         defaultMode: DisplayModeOption? = nil,
         nativeMode: DisplayModeOption? = nil,
         currentModeID: Int32 = 0,
-        currentModeOption: DisplayModeOption? = nil
+        currentModeOption: DisplayModeOption? = nil,
+        bounds: CGRect = .zero
     ) {
         self.displayID = displayID
         self.name = name
@@ -238,5 +244,6 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         self.nativeMode = nativeMode
         self.currentModeID = currentModeID
         self.currentModeOption = currentModeOption
+        self.bounds = bounds
     }
 }

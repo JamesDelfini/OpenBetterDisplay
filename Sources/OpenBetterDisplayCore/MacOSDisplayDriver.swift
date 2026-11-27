@@ -280,6 +280,7 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             )
             let currentModeID = fetchCurrentModeID(for: displayID)
             let modes = fetchDisplayModes(for: displayID)
+            let bounds = CGDisplayBounds(displayID)
 
             return RawDisplayInfo(
                 displayID: displayID,
@@ -291,7 +292,8 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 modelID: modelID,
                 serialNumber: serialNumber,
                 currentModeID: currentModeID,
-                modes: modes
+                modes: modes,
+                bounds: bounds
             )
         }
     }

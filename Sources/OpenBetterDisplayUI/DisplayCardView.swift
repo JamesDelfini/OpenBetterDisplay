@@ -29,6 +29,7 @@ public struct DisplayCardView: View {
         VStack(alignment: .leading, spacing: 10) {
             BrightnessControlRow(display: display, coordinator: coordinator)
             DisplayModeSectionView(display: display, coordinator: coordinator)
+            RefreshRateSectionView(display: display, coordinator: coordinator)
 
             DisplayDisclosureChevron(isExpanded: isMainDisplayDrawerExpanded, displayName: display.name) {
                 coordinator.toggleExpandedSection(.mainDisplay(display.displayID))

@@ -345,6 +345,40 @@ public final class DisplayCoordinator: ObservableObject {
             return
         }
 
+        applyDisplayModeSwitch(at: index, modeID: modeID)
+    }
+
+    public func selectRefreshRate(_ displayID: UInt32, modeID: Int32) {
+        guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
+            displays[index].isEnabled
+        else {
+            return
+        }
+
+        let display = displays[index]
+        let activeOption =
+            display.availableModes.first(where: { $0.modeID == display.currentModeID })
+            ?? display.currentModeOption
+        let matchesOption = display.refreshRateOptions.contains(where: { $0.modeID == modeID })
+        let matchesActiveResolutionAndTier =
+            activeOption.map { active in
+                display.availableModes.contains { candidate in
+                    candidate.modeID == modeID
+                        && candidate.width == active.width
+                        && candidate.height == active.height
+                        && candidate.isHiDPI == active.isHiDPI
+                }
+            } ?? false
+        guard matchesOption || matchesActiveResolutionAndTier else {
+            return
+        }
+
+        applyDisplayModeSwitch(at: index, modeID: modeID)
+    }
+
+    private func applyDisplayModeSwitch(at index: Int, modeID: Int32) {
+        let display = displays[index]
+        let displayID = display.displayID
         guard modeID != display.currentModeID else {
             return
         }

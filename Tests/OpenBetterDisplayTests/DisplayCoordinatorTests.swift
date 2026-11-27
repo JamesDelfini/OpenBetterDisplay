@@ -948,6 +948,341 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first?.currentModeID, 101)
     }
 
+    func testRefreshRateOptionsGroupActiveResolutionAndTierWithVRRIntegerAndExposedNTSCRates() {
+        let builtInModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 10,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true,
+                isVRR: true,
+                isProMotion: true,
+                minRefreshRate: 24.0
+            ),
+            RawDisplayMode(
+                modeID: 11,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 60.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 12,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 119.88,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 13,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 59.94,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 14,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 47.95,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 15,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 29.97,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 16,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 23.976,
+                bitsPerSample: 10
+            ),
+            // Same logical resolution but LoDPI — must be excluded while active mode is HiDPI
+            RawDisplayMode(
+                modeID: 17,
+                width: 1512,
+                height: 982,
+                pixelWidth: 1512,
+                pixelHeight: 982,
+                refreshRate: 50.0,
+                bitsPerSample: 8
+            ),
+            // Different logical resolution HiDPI — must be excluded
+            RawDisplayMode(
+                modeID: 18,
+                width: 1800,
+                height: 1169,
+                pixelWidth: 3600,
+                pixelHeight: 2338,
+                refreshRate: 75.0,
+                bitsPerSample: 10
+            )
+        ]
+
+        let dellModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 30,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVRR: true,
+                minRefreshRate: 48.0
+            ),
+            RawDisplayMode(
+                modeID: 31,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 32,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 60.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 33,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 2560,
+                pixelHeight: 1440,
+                refreshRate: 75.0,
+                bitsPerSample: 8
+            )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false, currentModeID: 10, modes: builtInModes),
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 30, modes: dellModes)
+        ])
+
+        let coordinator = DisplayCoordinator(driver: driver)
+        let builtIn = coordinator.displays[0]
+        XCTAssertEqual(builtIn.refreshRateLabel, "24–120Hz")
+
+        let builtInPrimary = builtIn.refreshRateOptions.filter { !$0.isNTSC }
+        let builtInNTSC = builtIn.refreshRateOptions.filter(\.isNTSC)
+        XCTAssertEqual(builtInPrimary.map(\.modeID), [10, 11])
+        XCTAssertEqual(builtInPrimary.map(\.label), ["24–120Hz (Variable)", "60Hz"])
+        XCTAssertEqual(builtInPrimary.map(\.isVRR), [true, false])
+        XCTAssertEqual(builtInNTSC.map(\.modeID), [12, 13, 14, 15, 16])
+        XCTAssertEqual(builtInNTSC.map(\.label), ["119.88Hz", "59.94Hz", "47.95Hz", "29.97Hz", "23.98Hz"])
+
+        let dell = coordinator.displays[1]
+        XCTAssertEqual(dell.refreshRateLabel, "48–120Hz")
+        XCTAssertEqual(dell.refreshRateOptions.filter(\.isNTSC), [])
+        XCTAssertEqual(dell.refreshRateOptions.map(\.modeID), [30, 31, 32])
+        XCTAssertEqual(dell.refreshRateOptions.map(\.label), ["48–120Hz (Variable)", "120Hz", "60Hz"])
+    }
+
+    func testRefreshRateOptionsDeduplicateBitDepthsWhilePreservingActiveModeAndVRR() {
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 200,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVRR: true,
+                minRefreshRate: 48.0
+            ),
+            RawDisplayMode(
+                modeID: 201,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 202,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 203,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 60.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 204,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            )
+        ]
+
+        // Active mode is 8-bit 60Hz (modeID 204) -> keeps 204 selected and prefers 8-bit 120Hz (202) while keeping VRR 200 distinct
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 204, modes: modes)
+        ])
+
+        let coordinator = DisplayCoordinator(driver: driver)
+        let options = coordinator.displays.first?.refreshRateOptions ?? []
+        XCTAssertEqual(options.map(\.modeID), [200, 202, 204])
+        XCTAssertEqual(options.map(\.label), ["48–120Hz (Variable)", "120Hz", "60Hz"])
+    }
+
+    func testSelectingRefreshRateSwitchesImmediatelyPreservingResolutionAndScalingTier() {
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 300,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVRR: true,
+                minRefreshRate: 48.0
+            ),
+            RawDisplayMode(
+                modeID: 301,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 302,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 60.0,
+                bitsPerSample: 10
+            ),
+            // Same resolution, LoDPI — must be rejected by selectRefreshRate
+            RawDisplayMode(
+                modeID: 303,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 2560,
+                pixelHeight: 1440,
+                refreshRate: 75.0,
+                bitsPerSample: 8
+            ),
+            // Different resolution, HiDPI — must be rejected by selectRefreshRate
+            RawDisplayMode(
+                modeID: 304,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 60.0,
+                bitsPerSample: 10
+            )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 301, modes: modes)
+        ])
+
+        let coordinator = DisplayCoordinator(driver: driver)
+        XCTAssertEqual(coordinator.displays.first?.refreshRateLabel, "120Hz")
+        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440")
+        XCTAssertEqual(coordinator.displays.first?.currentModeOption?.isHiDPI, true)
+
+        // Switch to 48-120Hz VRR
+        coordinator.selectRefreshRate(30, modeID: 300)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+        XCTAssertEqual(driver.setModeHistory.last?.modeID, 300)
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 300)
+        XCTAssertEqual(coordinator.displays.first?.refreshRateLabel, "48–120Hz")
+        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440")
+        XCTAssertEqual(coordinator.displays.first?.currentModeOption?.isHiDPI, true)
+
+        // Selecting already-active refresh rate does not call driver again
+        coordinator.selectRefreshRate(30, modeID: 300)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+
+        // Switch to 60Hz HiDPI
+        coordinator.selectRefreshRate(30, modeID: 302)
+        XCTAssertEqual(driver.setModeHistory.count, 2)
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 302)
+        XCTAssertEqual(coordinator.displays.first?.refreshRateLabel, "60Hz")
+
+        // Modes from another tier (LoDPI 303), another resolution (304), or unknown ID (999) are ignored
+        coordinator.selectRefreshRate(30, modeID: 303)
+        coordinator.selectRefreshRate(30, modeID: 304)
+        coordinator.selectRefreshRate(30, modeID: 999)
+        XCTAssertEqual(driver.setModeHistory.count, 2)
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 302)
+    }
+
+    func testFailedRefreshRateSwitchAndDisabledDisplayPreservePreviousState() {
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(modeID: 301, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0),
+            RawDisplayMode(modeID: 302, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0)
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 301, modes: modes)
+        ])
+        driver.setDisplayModeError = DisplayDriverError.configurationFailed(-1)
+
+        let coordinator = DisplayCoordinator(driver: driver)
+        coordinator.selectRefreshRate(30, modeID: 302)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 301)
+        XCTAssertEqual(coordinator.displays.first?.refreshRateLabel, "120Hz")
+
+        driver.setDisplayModeError = nil
+        driver.onlineDisplays[0].isActive = false
+        coordinator.handleDisplayReconfiguration()
+        XCTAssertEqual(coordinator.displays.first?.isEnabled, false)
+
+        coordinator.selectRefreshRate(30, modeID: 302)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 301)
+    }
+
     func testTogglingActiveNonMainDisplayOffDisconnectsAtOSLevelAndRetainsDisplayInOffState() {
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
@@ -1372,21 +1707,27 @@ final class DisplayCoordinatorTests: XCTestCase {
         coordinator.toggleExpandedSection(.displayMode(20))
         XCTAssertEqual(coordinator.expandedSection, .displayMode(20))
 
-        // Expanding Set as Main Display on the same display collapses Display Mode
+        // Expanding Refresh Rate on the same display collapses Display Mode
+        coordinator.toggleExpandedSection(.refreshRate(20))
+        XCTAssertEqual(coordinator.expandedSection, .refreshRate(20))
+
+        // Expanding Set as Main Display on the same display collapses Refresh Rate
         coordinator.toggleExpandedSection(.mainDisplay(20))
         XCTAssertEqual(coordinator.expandedSection, .mainDisplay(20))
 
-        // Expanding Display Mode on another Enabled Display (including Main Display) collapses previous section
-        coordinator.toggleExpandedSection(.displayMode(30))
-        XCTAssertEqual(coordinator.expandedSection, .displayMode(30))
+        // Expanding Refresh Rate on another Enabled Display collapses previous section
+        coordinator.toggleExpandedSection(.refreshRate(30))
+        XCTAssertEqual(coordinator.expandedSection, .refreshRate(30))
 
         // Clicking the already-expanded section collapses it
-        coordinator.toggleExpandedSection(.displayMode(30))
+        coordinator.toggleExpandedSection(.refreshRate(30))
         XCTAssertNil(coordinator.expandedSection)
 
-        // Disconnected Display cannot expand Display Mode or Set as Main Display
+        // Disconnected Display cannot expand Display Mode, Refresh Rate, or Set as Main Display
         coordinator.setDisplayEnabled(20, enabled: false)
         coordinator.toggleExpandedSection(.displayMode(20))
+        XCTAssertNil(coordinator.expandedSection)
+        coordinator.toggleExpandedSection(.refreshRate(20))
         XCTAssertNil(coordinator.expandedSection)
         coordinator.toggleExpandedSection(.mainDisplay(20))
         XCTAssertNil(coordinator.expandedSection)
@@ -1438,15 +1779,19 @@ final class DisplayCoordinatorTests: XCTestCase {
 
         let coordinator = DisplayCoordinator(driver: driver)
 
-        // Expanding Display Mode on DELL P2217H then turning it off auto-collapses the section
+        // Expanding Display Mode or Refresh Rate on DELL P2217H then turning it off auto-collapses the section
         coordinator.toggleExpandedSection(.displayMode(20))
         XCTAssertEqual(coordinator.expandedSection, .displayMode(20))
+        coordinator.toggleExpandedSection(.refreshRate(20))
+        XCTAssertEqual(coordinator.expandedSection, .refreshRate(20))
         coordinator.setDisplayEnabled(20, enabled: false)
         XCTAssertNil(coordinator.expandedSection)
 
         // Expanding DELL U2725QE then physically unplugging it auto-collapses the section
         coordinator.toggleExpandedSection(.mainDisplay(30))
         XCTAssertEqual(coordinator.expandedSection, .mainDisplay(30))
+        coordinator.toggleExpandedSection(.refreshRate(30))
+        XCTAssertEqual(coordinator.expandedSection, .refreshRate(30))
         driver.onlineDisplays = [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: true)
         ]
@@ -1464,7 +1809,11 @@ final class DisplayCoordinatorTests: XCTestCase {
 
         coordinator.toggleExpandedSection(.displayMode(1))
         XCTAssertEqual(coordinator.expandedSection, .displayMode(1))
+        coordinator.handlePopoverDidClose()
+        XCTAssertNil(coordinator.expandedSection)
 
+        coordinator.toggleExpandedSection(.refreshRate(1))
+        XCTAssertEqual(coordinator.expandedSection, .refreshRate(1))
         coordinator.handlePopoverDidClose()
         XCTAssertNil(coordinator.expandedSection)
     }

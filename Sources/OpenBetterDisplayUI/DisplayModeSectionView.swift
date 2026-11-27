@@ -149,7 +149,7 @@ public struct DisplayModeSectionView: View {
 
             safeModesSection
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 6)
         .padding(.vertical, 8)
     }
 
@@ -255,18 +255,18 @@ private struct DisplayModeRowView: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 9.5, weight: .bold))
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(Color.white.opacity(0.95))
                     .opacity(isSelected ? 1 : 0)
-                    .frame(width: 11, alignment: .center)
+                    .frame(width: 10, alignment: .center)
 
                 ForEach(pinnedMarkers, id: \.self) { marker in
                     Text(marker.symbol)
-                        .font(.system(size: marker == .nativeMode ? 11.5 : 10, weight: .bold))
+                        .font(.system(size: marker == .nativeMode ? 11 : 9.5, weight: .bold))
                         .foregroundStyle(marker == .defaultMode ? Color.yellow.opacity(0.88) : Color.white.opacity(0.82))
-                        .frame(width: 11, alignment: .center)
+                        .frame(width: 10, alignment: .center)
                         .help(marker.helpText)
                 }
 
@@ -275,10 +275,11 @@ private struct DisplayModeRowView: View {
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(isSelected ? 0.98 : 0.88))
                     .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
 
-                Spacer(minLength: 4)
+                Spacer(minLength: 2)
 
-                HStack(spacing: 3) {
+                HStack(spacing: 2.5) {
                     if mode.isHiDPI {
                         DisplayModeBadgeView(
                             text: "✦",
@@ -298,8 +299,9 @@ private struct DisplayModeRowView: View {
                         isEmphasized: mode.bitsPerSample >= 10
                     )
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 5)
+            .padding(.horizontal, 4)
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -335,10 +337,10 @@ private struct DisplayModeBadgeView: View {
 
     var body: some View {
         let badge = Text(text)
-            .font(.system(size: 9.5, weight: .medium))
+            .font(.system(size: 9, weight: .medium))
             .monospacedDigit()
             .foregroundStyle(isEmphasized ? Color.white.opacity(0.92) : Color.white.opacity(0.70))
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 3)
             .padding(.vertical, 1.5)
             .background(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)

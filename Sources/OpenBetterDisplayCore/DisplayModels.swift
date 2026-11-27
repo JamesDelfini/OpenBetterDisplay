@@ -28,6 +28,9 @@ public struct RawDisplayMode: Equatable, Sendable {
     public var bitsPerSample: Int
     public var isDefault: Bool
     public var isStretched: Bool
+    public var isVRR: Bool
+    public var isProMotion: Bool
+    public var minRefreshRate: Double?
 
     public init(
         modeID: Int32,
@@ -40,7 +43,10 @@ public struct RawDisplayMode: Equatable, Sendable {
         isNative: Bool = false,
         bitsPerSample: Int = 8,
         isDefault: Bool = false,
-        isStretched: Bool = false
+        isStretched: Bool = false,
+        isVRR: Bool = false,
+        isProMotion: Bool = false,
+        minRefreshRate: Double? = nil
     ) {
         self.modeID = modeID
         self.width = width
@@ -53,6 +59,9 @@ public struct RawDisplayMode: Equatable, Sendable {
         self.bitsPerSample = bitsPerSample
         self.isDefault = isDefault
         self.isStretched = isStretched
+        self.isVRR = isVRR
+        self.isProMotion = isProMotion
+        self.minRefreshRate = minRefreshRate
     }
 }
 
@@ -120,6 +129,9 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
     public var isHiDPI: Bool
     public var isDefault: Bool
     public var isNative: Bool
+    public var isVRR: Bool
+    public var isProMotion: Bool
+    public var minRefreshRate: Double?
     public var aspectRatioLabel: String
     public var refreshRateLabel: String?
     public var colorDepthLabel: String
@@ -138,6 +150,9 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
         isHiDPI: Bool,
         isDefault: Bool,
         isNative: Bool,
+        isVRR: Bool = false,
+        isProMotion: Bool = false,
+        minRefreshRate: Double? = nil,
         aspectRatioLabel: String,
         refreshRateLabel: String?,
         colorDepthLabel: String,
@@ -153,10 +168,46 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
         self.isHiDPI = isHiDPI
         self.isDefault = isDefault
         self.isNative = isNative
+        self.isVRR = isVRR
+        self.isProMotion = isProMotion
+        self.minRefreshRate = minRefreshRate
         self.aspectRatioLabel = aspectRatioLabel
         self.refreshRateLabel = refreshRateLabel
         self.colorDepthLabel = colorDepthLabel
         self.resolutionLabel = resolutionLabel
+    }
+}
+
+public struct RefreshRateOption: Equatable, Identifiable, Sendable {
+    public var modeID: Int32
+    public var refreshRate: Double
+    public var minRefreshRate: Double?
+    public var isVRR: Bool
+    public var isProMotion: Bool
+    public var isNTSC: Bool
+    public var label: String
+    public var shortLabel: String
+
+    public var id: Int32 { modeID }
+
+    public init(
+        modeID: Int32,
+        refreshRate: Double,
+        minRefreshRate: Double? = nil,
+        isVRR: Bool = false,
+        isProMotion: Bool = false,
+        isNTSC: Bool = false,
+        label: String,
+        shortLabel: String
+    ) {
+        self.modeID = modeID
+        self.refreshRate = refreshRate
+        self.minRefreshRate = minRefreshRate
+        self.isVRR = isVRR
+        self.isProMotion = isProMotion
+        self.isNTSC = isNTSC
+        self.label = label
+        self.shortLabel = shortLabel
     }
 }
 
@@ -208,6 +259,20 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
             return current.resolutionLabel
         }
         return currentModeOption?.resolutionLabel ?? ""
+    }
+
+    public var refreshRateLabel: String {
+        if let current = availableModes.first(where: { $0.modeID == currentModeID }),
+            let label = current.refreshRateLabel
+        {
+            return label
+        }
+        return currentModeOption?.refreshRateLabel ?? ""
+    }
+
+    public var refreshRateOptions: [RefreshRateOption] {
+        let active = availableModes.first(where: { $0.modeID == currentModeID }) ?? currentModeOption
+        return DisplayModeFilter.refreshRateOptions(for: active, in: availableModes)
     }
 
     public init(

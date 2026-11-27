@@ -57,6 +57,7 @@ private func renderPreview() {
     var outputPath = "/tmp/openbetterdisplay-preview.png"
     var expandMainID: UInt32?
     var expandModeID: UInt32?
+    var expandRefreshID: UInt32?
     var disconnectID: UInt32?
 
     var index = 0
@@ -67,6 +68,9 @@ private func renderPreview() {
             index += 2
         } else if arg == "--expanded-mode", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             expandModeID = id
+            index += 2
+        } else if arg == "--expanded-refresh", index + 1 < args.count, let id = UInt32(args[index + 1]) {
+            expandRefreshID = id
             index += 2
         } else if arg == "--disconnect", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             disconnectID = id
@@ -104,7 +108,37 @@ private func renderPreview() {
                         refreshRate: 120.0,
                         isNative: true,
                         bitsPerSample: 10,
-                        isDefault: true
+                        isDefault: true,
+                        isVRR: true,
+                        isProMotion: true,
+                        minRefreshRate: 24.0
+                    ),
+                    RawDisplayMode(
+                        modeID: 15,
+                        width: 1512,
+                        height: 982,
+                        pixelWidth: 3024,
+                        pixelHeight: 1964,
+                        refreshRate: 60.0,
+                        bitsPerSample: 10
+                    ),
+                    RawDisplayMode(
+                        modeID: 16,
+                        width: 1512,
+                        height: 982,
+                        pixelWidth: 3024,
+                        pixelHeight: 1964,
+                        refreshRate: 59.94,
+                        bitsPerSample: 10
+                    ),
+                    RawDisplayMode(
+                        modeID: 17,
+                        width: 1512,
+                        height: 982,
+                        pixelWidth: 3024,
+                        pixelHeight: 1964,
+                        refreshRate: 47.95,
+                        bitsPerSample: 10
                     ),
                     RawDisplayMode(
                         modeID: 13, width: 1800, height: 1169, pixelWidth: 3600, pixelHeight: 2338, refreshRate: 120.0, bitsPerSample: 10),
@@ -125,6 +159,9 @@ private func renderPreview() {
                     RawDisplayMode(
                         modeID: 21, width: 1600, height: 900, pixelWidth: 1600, pixelHeight: 900, refreshRate: 60.0, bitsPerSample: 8),
                     RawDisplayMode(
+                        modeID: 23, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 75.0, isNative: true,
+                        bitsPerSample: 8),
+                    RawDisplayMode(
                         modeID: 22,
                         width: 1920,
                         height: 1080,
@@ -134,7 +171,10 @@ private func renderPreview() {
                         isNative: true,
                         bitsPerSample: 8,
                         isDefault: true
-                    )
+                    ),
+                    RawDisplayMode(
+                        modeID: 24, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 50.0, isNative: true,
+                        bitsPerSample: 8)
                 ]
             ),
             RawDisplayInfo(
@@ -153,6 +193,30 @@ private func renderPreview() {
                         modeID: 32, width: 2304, height: 1296, pixelWidth: 4608, pixelHeight: 2592, refreshRate: 120.0, bitsPerSample: 10),
                     RawDisplayMode(
                         modeID: 33, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 41,
+                        width: 2560,
+                        height: 1440,
+                        pixelWidth: 5120,
+                        pixelHeight: 2880,
+                        refreshRate: 120.0,
+                        bitsPerSample: 10,
+                        isVRR: true,
+                        minRefreshRate: 48.0
+                    ),
+                    RawDisplayMode(
+                        modeID: 42,
+                        width: 2560,
+                        height: 1440,
+                        pixelWidth: 5120,
+                        pixelHeight: 2880,
+                        refreshRate: 75.0,
+                        bitsPerSample: 10,
+                        isVRR: true,
+                        minRefreshRate: 48.0
+                    ),
+                    RawDisplayMode(
+                        modeID: 43, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0, bitsPerSample: 10),
                     RawDisplayMode(
                         modeID: 34, width: 2560, height: 1440, pixelWidth: 2560, pixelHeight: 1440, refreshRate: 60.0, bitsPerSample: 8),
                     RawDisplayMode(
@@ -191,6 +255,8 @@ private func renderPreview() {
 
     if let expandModeID {
         coordinator.toggleExpandedSection(.displayMode(expandModeID))
+    } else if let expandRefreshID {
+        coordinator.toggleExpandedSection(.refreshRate(expandRefreshID))
     } else if let expandMainID {
         coordinator.toggleExpandedSection(.mainDisplay(expandMainID))
     }

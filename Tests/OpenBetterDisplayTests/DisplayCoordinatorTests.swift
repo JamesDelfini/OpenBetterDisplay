@@ -533,19 +533,83 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(driver.brightnessReadings[20]?.level, 0.35)
     }
 
-    func testFiltersModesToNativeAspectRatioAndCurrentRefreshRatePreferringHiDPIOn4KDisplay() {
+    func testExposesSafeAtLeast720pModesAndHidesUnsafeStretchedAndSub720pModes() {
         let modes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 103, width: 3008, height: 1692, pixelWidth: 6016, pixelHeight: 3384, refreshRate: 60.0),
-            RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 201, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 60.0),
-            RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0),
-            RawDisplayMode(modeID: 202, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 30.0),
-            RawDisplayMode(modeID: 203, width: 1920, height: 1200, pixelWidth: 3840, pixelHeight: 2400, refreshRate: 60.0),
-            RawDisplayMode(modeID: 204, width: 1024, height: 768, pixelWidth: 1024, pixelHeight: 768, refreshRate: 60.0),
-            RawDisplayMode(modeID: 104, width: 1504, height: 846, pixelWidth: 3008, pixelHeight: 1692, refreshRate: 60.0),
             RawDisplayMode(
-                modeID: 205, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, isUsableForDesktopGUI: false
+                modeID: 100,
+                width: 3840,
+                height: 2160,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 102,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 101,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 103,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            ),
+            // Sub-720p mode must be excluded even if marked usable
+            RawDisplayMode(
+                modeID: 201,
+                width: 960,
+                height: 540,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 60.0
+            ),
+            RawDisplayMode(
+                modeID: 202,
+                width: 800,
+                height: 600,
+                pixelWidth: 800,
+                pixelHeight: 600,
+                refreshRate: 60.0
+            ),
+            // Stretched mode must be excluded even if >= 720p
+            RawDisplayMode(
+                modeID: 203,
+                width: 1600,
+                height: 1200,
+                pixelWidth: 1600,
+                pixelHeight: 1200,
+                refreshRate: 60.0,
+                isStretched: true
+            ),
+            // Unsafe mode must be excluded
+            RawDisplayMode(
+                modeID: 204,
+                width: 1920,
+                height: 1200,
+                pixelWidth: 3840,
+                pixelHeight: 2400,
+                refreshRate: 60.0,
+                isUsableForDesktopGUI: false
             )
         ]
 
@@ -566,323 +630,226 @@ final class DisplayCoordinatorTests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(display.availableModes.map(\.modeID), [104, 101, 102, 103])
-        XCTAssertTrue(display.availableModes.allSatisfy(\.isHiDPI))
-        XCTAssertEqual(
-            display.availableModes.map(\.label),
-            ["1504x846 · 78%", "1920x1080", "2560x1440 · 133%", "3008x1692 · 157%"]
-        )
+        XCTAssertEqual(display.availableModes.map(\.modeID), [100, 102, 101, 103])
+        XCTAssertEqual(display.resolutionLabel, "2560x1440")
         XCTAssertEqual(display.currentModeID, 102)
-        XCTAssertEqual(display.resolutionLabel, "2560x1440 · 133%")
+        XCTAssertEqual(display.defaultMode?.modeID, 101)
+        XCTAssertEqual(display.nativeMode?.modeID, 100)
     }
 
-    func testFormatsRetinaBuiltInAndStandard1xExternalDisplayResolutionLabels() {
+    func testResolvesNativeModeStrictlyAsOneToOnePhysicalPixelGridEvenWhenHiDPIAlsoHasNativeFlag() {
         let builtInModes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 10, width: 3024, height: 1964, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0),
-            RawDisplayMode(modeID: 13, width: 1800, height: 1169, pixelWidth: 3600, pixelHeight: 2338, refreshRate: 120.0),
-            RawDisplayMode(modeID: 12, width: 1512, height: 982, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0),
-            RawDisplayMode(modeID: 11, width: 1352, height: 878, pixelWidth: 2704, pixelHeight: 1756, refreshRate: 120.0)
+            // macOS sets kDisplayModeNativeFlag on both 1x 3024x1964 and 2x HiDPI 1512x982
+            RawDisplayMode(
+                modeID: 54,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 10,
+                width: 3024,
+                height: 1964,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 11,
+                width: 3024,
+                height: 1964,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 60.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 55,
+                width: 1147,
+                height: 745,
+                pixelWidth: 2294,
+                pixelHeight: 1490,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 56,
+                width: 1024,
+                height: 665,
+                pixelWidth: 2048,
+                pixelHeight: 1330,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            )
         ]
+
         let standard1080pModes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 23, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 60.0),
-            RawDisplayMode(modeID: 21, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60.0),
-            RawDisplayMode(modeID: 22, width: 1600, height: 900, pixelWidth: 1600, pixelHeight: 900, refreshRate: 60.0),
-            RawDisplayMode(modeID: 24, width: 1024, height: 768, pixelWidth: 1024, pixelHeight: 768, refreshRate: 60.0)
+            RawDisplayMode(
+                modeID: 32,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 60.0,
+                isNative: true,
+                bitsPerSample: 8,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 31,
+                width: 960,
+                height: 540,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 60.0,
+                isNative: true,
+                bitsPerSample: 8
+            )
         ]
 
         let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(
-                displayID: 1,
-                name: "Built-in Display",
-                isBuiltIn: true,
-                isMain: true,
-                currentModeID: 12,
-                modes: builtInModes
-            ),
-            RawDisplayInfo(
-                displayID: 20,
-                name: "DELL P2217H",
-                isBuiltIn: false,
-                isMain: false,
-                currentModeID: 23,
-                modes: standard1080pModes
-            )
+            RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false, currentModeID: 54, modes: builtInModes),
+            RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: true, currentModeID: 32, modes: standard1080pModes)
         ])
 
         let coordinator = DisplayCoordinator(driver: driver)
-        XCTAssertEqual(coordinator.displays.count, 2)
 
         let builtIn = coordinator.displays[0]
-        XCTAssertEqual(
-            builtIn.availableModes.map(\.label),
-            ["1352x878 · 89%", "1512x982", "1800x1169 · 119%"]
-        )
-        XCTAssertEqual(builtIn.resolutionLabel, "1512x982")
+        XCTAssertEqual(builtIn.defaultMode?.modeID, 54)
+        XCTAssertEqual(builtIn.nativeMode?.modeID, 10)
+        XCTAssertEqual(builtIn.nativeMode?.isHiDPI, false)
+        XCTAssertEqual(builtIn.availableModes.map(\.modeID), [10, 11, 54, 55])
 
-        let dell1080p = coordinator.displays[1]
-        XCTAssertEqual(
-            dell1080p.availableModes.map(\.label),
-            ["1280x720", "1600x900", "1920x1080"]
-        )
-        XCTAssertTrue(dell1080p.availableModes.allSatisfy { !$0.isHiDPI })
-        XCTAssertEqual(dell1080p.resolutionLabel, "1920x1080")
+        let dell = coordinator.displays[1]
+        XCTAssertEqual(dell.defaultMode?.modeID, 32)
+        XCTAssertEqual(dell.nativeMode?.modeID, 32)
+        XCTAssertEqual(dell.availableModes.map(\.modeID), [32])
     }
 
-    func testStandard1080pPanelExposingLowResHiDPIDuplicateKeepsStandardModes() {
-        // macOS lists a 960x540 HiDPI duplicate for 1080p panels when low-resolution duplicates are requested
+    func testFormatsDisplayModeMetadataBadgesForHiDPIAspectRatioRefreshRateAndColorDepth() {
         let modes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 23, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 60.0),
-            RawDisplayMode(modeID: 21, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60.0),
-            RawDisplayMode(modeID: 25, width: 960, height: 540, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 60.0),
-            RawDisplayMode(modeID: 22, width: 1600, height: 900, pixelWidth: 1600, pixelHeight: 900, refreshRate: 60.0)
-        ]
-        let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: false, currentModeID: 23, modes: modes)
-        ])
-
-        let coordinator = DisplayCoordinator(driver: driver)
-
-        XCTAssertEqual(
-            coordinator.displays.first?.availableModes.map(\.label),
-            ["1280x720", "1600x900", "1920x1080"]
-        )
-        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "1920x1080")
-    }
-
-    func testHandlesZeroHzVariableRefreshRateAndPreservesNativeAspectRatioFiltering() {
-        // Built-in Retina display with notch: all modes report 0Hz (LCD/ProMotion), plus 16:10 notchless modes
-        let builtInZeroHzModes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 1, width: 3024, height: 1964, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 0.0),
-            RawDisplayMode(modeID: 2, width: 1024, height: 665, pixelWidth: 2048, pixelHeight: 1330, refreshRate: 0.0),
-            RawDisplayMode(modeID: 3, width: 1352, height: 878, pixelWidth: 2704, pixelHeight: 1756, refreshRate: 0.0),
-            RawDisplayMode(modeID: 4, width: 1512, height: 982, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 0.0),
-            RawDisplayMode(modeID: 5, width: 1800, height: 1169, pixelWidth: 3600, pixelHeight: 2338, refreshRate: 0.0),
-            // 16:10 notchless modes should be excluded by native aspect ratio filter
-            RawDisplayMode(modeID: 6, width: 1512, height: 945, pixelWidth: 3024, pixelHeight: 1890, refreshRate: 0.0),
-            RawDisplayMode(modeID: 7, width: 1800, height: 1125, pixelWidth: 3600, pixelHeight: 2250, refreshRate: 0.0)
-        ]
-
-        // External display whose current mode reports 0Hz (unspecified) while sibling modes report 60Hz
-        let mixedZeroHzModes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 20, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 0.0),
-            RawDisplayMode(modeID: 21, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60.0),
-            RawDisplayMode(modeID: 22, width: 1600, height: 900, pixelWidth: 1600, pixelHeight: 900, refreshRate: 60.0),
-            RawDisplayMode(modeID: 23, width: 1024, height: 768, pixelWidth: 1024, pixelHeight: 768, refreshRate: 60.0)
-        ]
-
-        let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(
-                displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: true, currentModeID: 4, modes: builtInZeroHzModes),
-            RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: false, currentModeID: 20, modes: mixedZeroHzModes)
-        ])
-
-        let coordinator = DisplayCoordinator(driver: driver)
-
-        XCTAssertEqual(
-            coordinator.displays[0].availableModes.map(\.label),
-            ["1024x665 · 68%", "1352x878 · 89%", "1512x982", "1800x1169 · 119%"]
-        )
-        XCTAssertEqual(coordinator.displays[0].resolutionLabel, "1512x982")
-
-        XCTAssertEqual(
-            coordinator.displays[1].availableModes.map(\.label),
-            ["1280x720", "1600x900", "1920x1080"]
-        )
-        XCTAssertEqual(coordinator.displays[1].resolutionLabel, "1920x1080")
-    }
-
-    func testMatchesNTSC5994HzWith60HzWhileExcludingOtherRefreshRates() {
-        let modes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 59.94),
-            RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 59.94),
-            RawDisplayMode(modeID: 103, width: 3008, height: 1692, pixelWidth: 6016, pixelHeight: 3384, refreshRate: 30.0),
-            RawDisplayMode(modeID: 104, width: 3360, height: 1890, pixelWidth: 6720, pixelHeight: 3780, refreshRate: 120.0)
-        ]
-
-        let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 102, modes: modes)
-        ])
-
-        let coordinator = DisplayCoordinator(driver: driver)
-
-        XCTAssertEqual(
-            coordinator.displays.first?.availableModes.map(\.modeID),
-            [101, 102]
-        )
-        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440 · 133%")
-    }
-
-    func testResolves16By9NativePanelWhen4KDisplayAlsoAdvertises4096x2160CinemaMode() {
-        let modes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 99, width: 4096, height: 2160, pixelWidth: 4096, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0),
-            RawDisplayMode(modeID: 103, width: 3008, height: 1692, pixelWidth: 6016, pixelHeight: 3384, refreshRate: 60.0)
-        ]
-
-        let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 102, modes: modes)
-        ])
-
-        let coordinator = DisplayCoordinator(driver: driver)
-
-        XCTAssertEqual(
-            coordinator.displays.first?.availableModes.map(\.label),
-            ["1920x1080", "2560x1440 · 133%", "3008x1692 · 157%"]
-        )
-        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440 · 133%")
-    }
-
-    func testDraggingResolutionSliderPreviewsLabelLiveWithoutCallingDriverAndCommitsOnceOnRelease() {
-        let modes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 104, width: 1504, height: 846, pixelWidth: 3008, pixelHeight: 1692, refreshRate: 60.0),
-            RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0),
-            RawDisplayMode(modeID: 103, width: 3008, height: 1692, pixelWidth: 6016, pixelHeight: 3384, refreshRate: 60.0)
-        ]
-
-        let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(
-                displayID: 30,
-                name: "DELL U2725QE",
-                isBuiltIn: false,
-                isMain: true,
-                currentModeID: 101,
-                modes: modes
-            )
-        ])
-
-        let coordinator = DisplayCoordinator(driver: driver)
-        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "1920x1080")
-        XCTAssertTrue(driver.setModeHistory.isEmpty)
-
-        // Drag through two stops without releasing
-        coordinator.previewResolution(30, modeID: 102)
-        XCTAssertEqual(coordinator.displays.first?.previewModeID, 102)
-        XCTAssertEqual(coordinator.displays.first?.currentModeID, 101)
-        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440 · 133%")
-        XCTAssertTrue(driver.setModeHistory.isEmpty)
-
-        coordinator.previewResolution(30, stepIndex: 3)
-        XCTAssertEqual(coordinator.displays.first?.previewModeID, 103)
-        XCTAssertEqual(coordinator.displays.first?.currentModeID, 101)
-        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "3008x1692 · 157%")
-        XCTAssertTrue(driver.setModeHistory.isEmpty)
-
-        // Release slider to commit once
-        coordinator.commitResolution(30)
-        XCTAssertEqual(driver.setModeHistory.count, 1)
-        XCTAssertEqual(driver.setModeHistory.first?.displayID, 30)
-        XCTAssertEqual(driver.setModeHistory.first?.modeID, 103)
-        XCTAssertNil(coordinator.displays.first?.previewModeID)
-        XCTAssertEqual(coordinator.displays.first?.currentModeID, 103)
-        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "3008x1692 · 157%")
-    }
-
-    func testSelectingResolutionFromDropdownCommitsModeImmediately() {
-        let modes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0)
-        ]
-
-        let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(
-                displayID: 30,
-                name: "DELL U2725QE",
-                isBuiltIn: false,
-                isMain: true,
-                currentModeID: 101,
-                modes: modes
-            )
-        ])
-
-        let coordinator = DisplayCoordinator(driver: driver)
-        coordinator.commitResolution(30, modeID: 102)
-
-        XCTAssertEqual(driver.setModeHistory.count, 1)
-        XCTAssertEqual(driver.setModeHistory.first?.displayID, 30)
-        XCTAssertEqual(driver.setModeHistory.first?.modeID, 102)
-        XCTAssertEqual(coordinator.displays.first?.currentModeID, 102)
-        XCTAssertNil(coordinator.displays.first?.previewModeID)
-        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440 · 133%")
-    }
-
-    func testFilteredOutActiveModePreservesRealResolutionAndAllowsSwitchingToFilteredStop() {
-        let modes: [RawDisplayMode] = [
-            // Active 1x native 3840x2160 mode (filtered out because 4K display prefers HiDPI stops)
-            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 104, width: 1504, height: 846, pixelWidth: 3008, pixelHeight: 1692, refreshRate: 60.0),
-            RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0),
-            RawDisplayMode(modeID: 103, width: 3008, height: 1692, pixelWidth: 6016, pixelHeight: 3384, refreshRate: 60.0)
-        ]
-
-        let driver = FakeDisplayDriver(onlineDisplays: [
-            RawDisplayInfo(
-                displayID: 30,
-                name: "DELL U2725QE",
-                isBuiltIn: false,
-                isMain: true,
-                currentModeID: 100,
-                modes: modes
+            RawDisplayMode(
+                modeID: 1,
+                width: 2400,
+                height: 1350,
+                pixelWidth: 4800,
+                pixelHeight: 2700,
+                refreshRate: 120.0,
+                bitsPerSample: 10
             ),
-            RawDisplayInfo(
-                displayID: 31,
-                name: "DELL U2725QE #2",
-                isBuiltIn: false,
-                isMain: false,
-                currentModeID: 100,
-                modes: modes
+            RawDisplayMode(
+                modeID: 2,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 59.94,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 3,
+                width: 1920,
+                height: 1200,
+                pixelWidth: 1920,
+                pixelHeight: 1200,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 4,
+                width: 1280,
+                height: 1024,
+                pixelWidth: 1280,
+                pixelHeight: 1024,
+                refreshRate: 75.0,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 5,
+                width: 1024,
+                height: 768,
+                pixelWidth: 1024,
+                pixelHeight: 768,
+                refreshRate: 0.0,
+                bitsPerSample: 8
             )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 1, modes: modes)
         ])
 
         let coordinator = DisplayCoordinator(driver: driver)
-        guard let firstDisplay = coordinator.displays.first(where: { $0.displayID == 30 }),
-            let secondDisplay = coordinator.displays.first(where: { $0.displayID == 31 })
-        else {
-            XCTFail("Expected both 4K displays")
-            return
-        }
+        let byID = Dictionary(uniqueKeysWithValues: (coordinator.displays.first?.availableModes ?? []).map { ($0.modeID, $0) })
 
-        // Must preserve real currentModeID (100) and real resolution label (3840x2160), not forge 1920x1080 (101)
-        XCTAssertEqual(firstDisplay.availableModes.map(\.modeID), [104, 101, 102, 103])
-        XCTAssertEqual(firstDisplay.currentModeID, 100)
-        XCTAssertEqual(firstDisplay.resolutionLabel, "3840x2160")
-        XCTAssertEqual(secondDisplay.currentModeID, 100)
-        XCTAssertEqual(secondDisplay.resolutionLabel, "3840x2160")
+        XCTAssertEqual(byID[1]?.resolutionLabel, "2400x1350")
+        XCTAssertEqual(byID[1]?.isHiDPI, true)
+        XCTAssertEqual(byID[1]?.aspectRatioLabel, "16:9")
+        XCTAssertEqual(byID[1]?.refreshRateLabel, "120Hz")
+        XCTAssertEqual(byID[1]?.colorDepthLabel, "10bit")
 
-        // Previewing a stop shows preview label without committing
-        coordinator.previewResolution(30, modeID: 102)
-        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.resolutionLabel, "2560x1440 · 133%")
-        XCTAssertTrue(driver.setModeHistory.isEmpty)
+        XCTAssertEqual(byID[2]?.resolutionLabel, "1512x982")
+        XCTAssertEqual(byID[2]?.isHiDPI, true)
+        XCTAssertEqual(byID[2]?.isDefault, true)
+        XCTAssertEqual(byID[2]?.isNative, false)
+        XCTAssertEqual(byID[2]?.aspectRatioLabel, "15.4:10")
+        XCTAssertEqual(byID[2]?.refreshRateLabel, "59.94Hz")
+        XCTAssertEqual(byID[2]?.colorDepthLabel, "10bit")
 
-        // Selecting 1920x1080 (101) from dropdown MUST call driver.setDisplayMode (must NOT no-op)
-        coordinator.commitResolution(30, modeID: 101)
-        XCTAssertEqual(driver.setModeHistory.count, 1)
-        XCTAssertEqual(driver.setModeHistory.first?.displayID, 30)
-        XCTAssertEqual(driver.setModeHistory.first?.modeID, 101)
-        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.currentModeID, 101)
-        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.resolutionLabel, "1920x1080")
+        XCTAssertEqual(byID[3]?.isHiDPI, false)
+        XCTAssertEqual(byID[3]?.aspectRatioLabel, "16:10")
+        XCTAssertEqual(byID[3]?.refreshRateLabel, "60Hz")
+        XCTAssertEqual(byID[3]?.colorDepthLabel, "8bit")
 
-        // Releasing slider at 1920x1080 (stepIndex 1) on display 31 MUST also call driver.setDisplayMode
-        coordinator.previewResolution(31, stepIndex: 1)
-        coordinator.commitResolution(31)
-        XCTAssertEqual(driver.setModeHistory.count, 2)
-        XCTAssertEqual(driver.setModeHistory.last?.displayID, 31)
-        XCTAssertEqual(driver.setModeHistory.last?.modeID, 101)
-        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 31 })?.currentModeID, 101)
-        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 31 })?.resolutionLabel, "1920x1080")
+        XCTAssertEqual(byID[4]?.aspectRatioLabel, "5:4")
+        XCTAssertEqual(byID[4]?.refreshRateLabel, "75Hz")
+
+        XCTAssertEqual(byID[5]?.aspectRatioLabel, "4:3")
+        XCTAssertNil(byID[5]?.refreshRateLabel)
     }
 
-    func testReleasingSliderOnUnchangedResolutionClearsPreviewWithoutCallingDriver() {
+    func testSelectingDisplayModeSwitchesImmediatelyAndUpdatesCurrentModeAndSummary() {
         let modes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
-            RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0)
+            RawDisplayMode(
+                modeID: 100,
+                width: 3840,
+                height: 2160,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 101,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 102,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            )
         ]
 
         let driver = FakeDisplayDriver(onlineDisplays: [
@@ -890,26 +857,54 @@ final class DisplayCoordinatorTests: XCTestCase {
         ])
 
         let coordinator = DisplayCoordinator(driver: driver)
-        XCTAssertEqual(coordinator.displays.first?.activeOrPreviewModeIndex, 0)
-
-        coordinator.previewResolution(30, stepIndex: 1)
-        XCTAssertEqual(coordinator.displays.first?.activeOrPreviewModeIndex, 1)
-        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440 · 133%")
-
-        // Drag back to initial stop and release
-        coordinator.previewResolution(30, stepIndex: 0)
-        coordinator.commitResolution(30)
-
+        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "1920x1080")
         XCTAssertTrue(driver.setModeHistory.isEmpty)
-        XCTAssertNil(coordinator.displays.first?.previewModeID)
+
+        coordinator.selectDisplayMode(30, modeID: 102)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+        XCTAssertEqual(driver.setModeHistory.first?.displayID, 30)
+        XCTAssertEqual(driver.setModeHistory.first?.modeID, 102)
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 102)
+        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440")
+
+        // Clicking already-active mode does not invoke driver again
+        coordinator.selectDisplayMode(30, modeID: 102)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+
+        // Switching to Native Mode works immediately
+        coordinator.selectDisplayMode(30, modeID: 100)
+        XCTAssertEqual(driver.setModeHistory.count, 2)
+        XCTAssertEqual(driver.setModeHistory.last?.modeID, 100)
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 100)
+        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "3840x2160")
+    }
+
+    func testFilteredOutActiveModePreservesRealResolutionAndAllowsSwitchingToSafeMode() {
+        let modes: [RawDisplayMode] = [
+            // Active sub-720p mode hidden from browser list
+            RawDisplayMode(modeID: 99, width: 800, height: 600, pixelWidth: 800, pixelHeight: 600, refreshRate: 60.0),
+            RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
+            RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0)
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 99, modes: modes)
+        ])
+
+        let coordinator = DisplayCoordinator(driver: driver)
+        XCTAssertEqual(coordinator.displays.first?.availableModes.map(\.modeID), [102, 101])
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 99)
+        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "800x600")
+
+        coordinator.selectDisplayMode(30, modeID: 101)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+        XCTAssertEqual(driver.setModeHistory.first?.modeID, 101)
         XCTAssertEqual(coordinator.displays.first?.currentModeID, 101)
-        XCTAssertEqual(coordinator.displays.first?.activeOrPreviewModeIndex, 0)
         XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "1920x1080")
     }
 
-    func testFailedModeCommitKeepsPreviousCurrentModeAndClearsPreview() {
+    func testFailedDisplayModeSwitchPreservesPreviousCurrentModeAndSummary() {
         let modes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
             RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
             RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0)
         ]
@@ -920,35 +915,36 @@ final class DisplayCoordinatorTests: XCTestCase {
         driver.setDisplayModeError = DisplayDriverError.configurationFailed(-1)
 
         let coordinator = DisplayCoordinator(driver: driver)
-        coordinator.previewResolution(30, modeID: 102)
-        coordinator.commitResolution(30)
+        coordinator.selectDisplayMode(30, modeID: 102)
 
         XCTAssertEqual(driver.setModeHistory.count, 1)
-        XCTAssertNil(coordinator.displays.first?.previewModeID)
         XCTAssertEqual(coordinator.displays.first?.currentModeID, 101)
         XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "1920x1080")
     }
 
-    func testResolutionChangesAreIgnoredForDisabledDisplay() {
+    func testDisplayModeSelectionIsIgnoredForDisabledDisplay() {
         let modes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 100, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
             RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
             RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0)
         ]
 
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(
-                displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: false, isActive: false, currentModeID: 101, modes: modes)
+                displayID: 30,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: false,
+                isActive: false,
+                currentModeID: 101,
+                modes: modes
+            )
         ])
 
         let coordinator = DisplayCoordinator(driver: driver)
         XCTAssertEqual(coordinator.displays.first?.isEnabled, false)
 
-        coordinator.previewResolution(30, modeID: 102)
-        coordinator.commitResolution(30, modeID: 102)
-
+        coordinator.selectDisplayMode(30, modeID: 102)
         XCTAssertTrue(driver.setModeHistory.isEmpty)
-        XCTAssertNil(coordinator.displays.first?.previewModeID)
         XCTAssertEqual(coordinator.displays.first?.currentModeID, 101)
     }
 
@@ -1362,7 +1358,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.map(\.isEnabled), [true, false, true])
     }
 
-    func testDisclosureDrawerStartsCollapsedAndActsAsSingleOpenAccordionAcrossEnabledDisplays() {
+    func testExpandedSectionsActAsSingleOpenAccordionAcrossDisplaysAndSections() {
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
             RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: false),
@@ -1370,27 +1366,33 @@ final class DisplayCoordinatorTests: XCTestCase {
         ])
 
         let coordinator = DisplayCoordinator(driver: driver)
-        XCTAssertNil(coordinator.expandedDisplayID)
+        XCTAssertNil(coordinator.expandedSection)
 
-        // Expand a non-main Enabled Display
-        coordinator.toggleExpandedDisplay(20)
-        XCTAssertEqual(coordinator.expandedDisplayID, 20)
+        // Expand Display Mode on display 20
+        coordinator.toggleExpandedSection(.displayMode(20))
+        XCTAssertEqual(coordinator.expandedSection, .displayMode(20))
 
-        // Expanding another Enabled Display (including the Main Display) collapses the previous one
-        coordinator.toggleExpandedDisplay(30)
-        XCTAssertEqual(coordinator.expandedDisplayID, 30)
+        // Expanding Set as Main Display on the same display collapses Display Mode
+        coordinator.toggleExpandedSection(.mainDisplay(20))
+        XCTAssertEqual(coordinator.expandedSection, .mainDisplay(20))
 
-        // Clicking the already-expanded display collapses it
-        coordinator.toggleExpandedDisplay(30)
-        XCTAssertNil(coordinator.expandedDisplayID)
+        // Expanding Display Mode on another Enabled Display (including Main Display) collapses previous section
+        coordinator.toggleExpandedSection(.displayMode(30))
+        XCTAssertEqual(coordinator.expandedSection, .displayMode(30))
 
-        // Disconnected Display cannot be expanded
+        // Clicking the already-expanded section collapses it
+        coordinator.toggleExpandedSection(.displayMode(30))
+        XCTAssertNil(coordinator.expandedSection)
+
+        // Disconnected Display cannot expand Display Mode or Set as Main Display
         coordinator.setDisplayEnabled(20, enabled: false)
-        coordinator.toggleExpandedDisplay(20)
-        XCTAssertNil(coordinator.expandedDisplayID)
+        coordinator.toggleExpandedSection(.displayMode(20))
+        XCTAssertNil(coordinator.expandedSection)
+        coordinator.toggleExpandedSection(.mainDisplay(20))
+        XCTAssertNil(coordinator.expandedSection)
     }
 
-    func testSettingMainDisplayRequestsPopoverCloseBeforeCallingDriverAndCollapsesDrawer() {
+    func testSettingMainDisplayRequestsPopoverCloseBeforeCallingDriverAndCollapsesExpandedSection() {
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
             RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: false),
@@ -1407,14 +1409,14 @@ final class DisplayCoordinatorTests: XCTestCase {
             }
         }
 
-        coordinator.toggleExpandedDisplay(20)
-        XCTAssertEqual(coordinator.expandedDisplayID, 20)
+        coordinator.toggleExpandedSection(.mainDisplay(20))
+        XCTAssertEqual(coordinator.expandedSection, .mainDisplay(20))
 
         // Setting DELL P2217H as Main Display must close the popover before driver.setMainDisplay runs
         coordinator.setMainDisplay(20)
         XCTAssertEqual(totalCloseRequests, 1)
         XCTAssertEqual(closeRequestsBeforeDriverCall, 1)
-        XCTAssertNil(coordinator.expandedDisplayID)
+        XCTAssertNil(coordinator.expandedSection)
         XCTAssertEqual(driver.mainDisplayHistory, [20])
         XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 20 })?.isMain, true)
         XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.isMain, false)
@@ -1427,7 +1429,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(totalCloseRequests, 1)
     }
 
-    func testDisclosureDrawerCollapsesOnDisconnectOrUnplug() {
+    func testExpandedSectionCollapsesOnDisconnectOrUnplug() {
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
             RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: false),
@@ -1436,23 +1438,23 @@ final class DisplayCoordinatorTests: XCTestCase {
 
         let coordinator = DisplayCoordinator(driver: driver)
 
-        // Expanding DELL P2217H then turning it off auto-collapses the drawer
-        coordinator.toggleExpandedDisplay(20)
-        XCTAssertEqual(coordinator.expandedDisplayID, 20)
+        // Expanding Display Mode on DELL P2217H then turning it off auto-collapses the section
+        coordinator.toggleExpandedSection(.displayMode(20))
+        XCTAssertEqual(coordinator.expandedSection, .displayMode(20))
         coordinator.setDisplayEnabled(20, enabled: false)
-        XCTAssertNil(coordinator.expandedDisplayID)
+        XCTAssertNil(coordinator.expandedSection)
 
-        // Expanding DELL U2725QE then physically unplugging it auto-collapses the drawer
-        coordinator.toggleExpandedDisplay(30)
-        XCTAssertEqual(coordinator.expandedDisplayID, 30)
+        // Expanding DELL U2725QE then physically unplugging it auto-collapses the section
+        coordinator.toggleExpandedSection(.mainDisplay(30))
+        XCTAssertEqual(coordinator.expandedSection, .mainDisplay(30))
         driver.onlineDisplays = [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: true)
         ]
         coordinator.handleDisplayReconfiguration()
-        XCTAssertNil(coordinator.expandedDisplayID)
+        XCTAssertNil(coordinator.expandedSection)
     }
 
-    func testPopoverCloseCollapsesExpandedDisclosureDrawer() {
+    func testPopoverCloseCollapsesAnyExpandedSection() {
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: true)
         ])
@@ -1460,11 +1462,11 @@ final class DisplayCoordinatorTests: XCTestCase {
         let coordinator = DisplayCoordinator(driver: driver)
         XCTAssertEqual(coordinator.displays.map(\.isMain), [true])
 
-        coordinator.toggleExpandedDisplay(1)
-        XCTAssertEqual(coordinator.expandedDisplayID, 1)
+        coordinator.toggleExpandedSection(.displayMode(1))
+        XCTAssertEqual(coordinator.expandedSection, .displayMode(1))
 
         coordinator.handlePopoverDidClose()
-        XCTAssertNil(coordinator.expandedDisplayID)
+        XCTAssertNil(coordinator.expandedSection)
     }
 }
 

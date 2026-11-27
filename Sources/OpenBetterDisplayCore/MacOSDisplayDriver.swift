@@ -23,9 +23,13 @@ public enum DisplayDriverError: Error, LocalizedError, Equatable {
 
 public enum SkyLightDisplayModeDescription {
     public static let byteLength: Int32 = 212
+    public static let displayModeDefaultFlag: UInt32 = 0x0000_0004
+    public static let displayModeStretchedFlag: UInt32 = 0x0000_0800
     public static let displayModeNativeFlag: UInt32 = 0x0200_0000
     private static let displayModeValidAndSafeMask: UInt32 = 0x0000_0003
-    private static let displayModeUnsafeOrStretchedFlag: UInt32 = 0x4000_0000
+    private static let displayModeUnsafeFlag: UInt32 = 0x4000_0000
+    private static let pixelEncodingOffset = 0x30
+    private static let pixelEncodingLength = 128
 
     public static func parse(bytes: [UInt8]) -> RawDisplayMode? {
         guard bytes.count >= Int(byteLength) else { return nil }
@@ -35,6 +39,7 @@ public enum SkyLightDisplayModeDescription {
         let width = Int(readUInt32LE(bytes, offset: 0x08))
         let height = Int(readUInt32LE(bytes, offset: 0x0C))
         let depth = readUInt32LE(bytes, offset: 0x10)
+        let rawBitsPerSample = Int(readUInt32LE(bytes, offset: 0x1C))
         let integerFreq = readUInt32LE(bytes, offset: 0x24)
         let fixedRefreshRate = readUInt32LE(bytes, offset: 0xBC)
         let ioFlags = readUInt32LE(bytes, offset: 0xC0)
@@ -71,13 +76,18 @@ public enum SkyLightDisplayModeDescription {
             refreshRate = Double(integerFreq)
         }
 
-        let isNative = ((ioFlags | flags) & displayModeNativeFlag) != 0
+        let bitsPerSample = resolveBitsPerSample(rawField: rawBitsPerSample, bytes: bytes)
+        let combinedFlags = ioFlags | flags
+        let isDefault = (combinedFlags & displayModeDefaultFlag) != 0
+        let isStretched = (combinedFlags & displayModeStretchedFlag) != 0
+        let isNative = (combinedFlags & displayModeNativeFlag) != 0
         let isUsableForDesktopGUI =
             (ioFlags & displayModeValidAndSafeMask) == displayModeValidAndSafeMask
-            && (flags & displayModeUnsafeOrStretchedFlag) == 0
-            && width >= 800
-            && height >= 600
-            && depth >= 4
+            && (flags & displayModeUnsafeFlag) == 0
+            && !isStretched
+            && width >= 720
+            && height >= 720
+            && max(Int(depth), rawBitsPerSample) >= 4
 
         return RawDisplayMode(
             modeID: modeID,
@@ -87,8 +97,37 @@ public enum SkyLightDisplayModeDescription {
             pixelHeight: pixelHeight,
             refreshRate: refreshRate,
             isUsableForDesktopGUI: isUsableForDesktopGUI,
-            isNative: isNative
+            isNative: isNative,
+            bitsPerSample: bitsPerSample,
+            isDefault: isDefault,
+            isStretched: isStretched
         )
+    }
+
+    private static func resolveBitsPerSample(rawField: Int, bytes: [UInt8]) -> Int {
+        if rawField > 0 {
+            return rawField
+        }
+        let redCount = parseRedChannelBitsFromPixelEncoding(bytes)
+        return redCount >= 4 ? redCount : 8
+    }
+
+    private static func parseRedChannelBitsFromPixelEncoding(_ bytes: [UInt8]) -> Int {
+        let start = pixelEncodingOffset
+        let end = min(bytes.count, start + pixelEncodingLength)
+        guard start < end else { return 0 }
+
+        var count = 0
+        for index in start..<end {
+            let byte = bytes[index]
+            if byte == 0 {
+                break
+            }
+            if byte == UInt8(ascii: "R") {
+                count += 1
+            }
+        }
+        return count
     }
 
     private static func readUInt32LE(_ bytes: [UInt8], offset: Int) -> UInt32 {
@@ -574,6 +613,45 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         return currentModeNumber
     }
 
+    public static func mergeDisplayModes(
+        cgModes: [RawDisplayMode],
+        skyLightModes: [RawDisplayMode]
+    ) -> [RawDisplayMode] {
+        var mergedByID: [Int32: RawDisplayMode] = [:]
+        var orderedIDs: [Int32] = []
+
+        for mode in cgModes {
+            if mergedByID[mode.modeID] == nil {
+                orderedIDs.append(mode.modeID)
+            }
+            mergedByID[mode.modeID] = mode
+        }
+
+        for skyLightMode in skyLightModes {
+            if var existing = mergedByID[skyLightMode.modeID] {
+                if skyLightMode.bitsPerSample > 0 {
+                    existing.bitsPerSample = skyLightMode.bitsPerSample
+                }
+                existing.isDefault = existing.isDefault || skyLightMode.isDefault
+                existing.isNative = existing.isNative || skyLightMode.isNative
+                existing.isStretched = existing.isStretched || skyLightMode.isStretched
+                existing.isUsableForDesktopGUI =
+                    existing.isUsableForDesktopGUI
+                    && skyLightMode.isUsableForDesktopGUI
+                    && !existing.isStretched
+                if existing.refreshRate <= 0, skyLightMode.refreshRate > 0 {
+                    existing.refreshRate = skyLightMode.refreshRate
+                }
+                mergedByID[skyLightMode.modeID] = existing
+            } else {
+                orderedIDs.append(skyLightMode.modeID)
+                mergedByID[skyLightMode.modeID] = skyLightMode
+            }
+        }
+
+        return orderedIDs.compactMap { mergedByID[$0] }
+    }
+
     private func fetchDisplayModes(for displayID: CGDirectDisplayID) -> [RawDisplayMode] {
         let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         var cgModes = (CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode]) ?? []
@@ -583,39 +661,26 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             cgModes.append(currentMode)
         }
 
-        var mergedByID: [Int32: RawDisplayMode] = [:]
-        var orderedIDs: [Int32] = []
-
-        for mode in cgModes {
-            let rawMode = RawDisplayMode(
+        let mappedCGModes = cgModes.map { mode in
+            let ioFlags = mode.ioFlags
+            let isStretched = (ioFlags & SkyLightDisplayModeDescription.displayModeStretchedFlag) != 0
+            return RawDisplayMode(
                 modeID: mode.ioDisplayModeID,
                 width: mode.width,
                 height: mode.height,
                 pixelWidth: mode.pixelWidth,
                 pixelHeight: mode.pixelHeight,
                 refreshRate: mode.refreshRate,
-                isUsableForDesktopGUI: mode.isUsableForDesktopGUI(),
-                isNative: (mode.ioFlags & SkyLightDisplayModeDescription.displayModeNativeFlag) != 0
+                isUsableForDesktopGUI: mode.isUsableForDesktopGUI() && !isStretched && mode.width >= 720 && mode.height >= 720,
+                isNative: (ioFlags & SkyLightDisplayModeDescription.displayModeNativeFlag) != 0,
+                bitsPerSample: 8,
+                isDefault: (ioFlags & SkyLightDisplayModeDescription.displayModeDefaultFlag) != 0,
+                isStretched: isStretched
             )
-            if mergedByID[rawMode.modeID] == nil {
-                orderedIDs.append(rawMode.modeID)
-            }
-            mergedByID[rawMode.modeID] = rawMode
         }
 
-        for skyLightMode in fetchSkyLightDisplayModes(for: displayID) {
-            if var existing = mergedByID[skyLightMode.modeID] {
-                if skyLightMode.isNative && !existing.isNative {
-                    existing.isNative = true
-                    mergedByID[skyLightMode.modeID] = existing
-                }
-            } else {
-                orderedIDs.append(skyLightMode.modeID)
-                mergedByID[skyLightMode.modeID] = skyLightMode
-            }
-        }
-
-        return orderedIDs.compactMap { mergedByID[$0] }
+        let skyLightModes = fetchSkyLightDisplayModes(for: displayID)
+        return Self.mergeDisplayModes(cgModes: mappedCGModes, skyLightModes: skyLightModes)
     }
 
     private func fetchSkyLightDisplayModes(for displayID: CGDirectDisplayID) -> [RawDisplayMode] {

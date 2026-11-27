@@ -25,6 +25,9 @@ public struct RawDisplayMode: Equatable, Sendable {
     public var refreshRate: Double
     public var isUsableForDesktopGUI: Bool
     public var isNative: Bool
+    public var bitsPerSample: Int
+    public var isDefault: Bool
+    public var isStretched: Bool
 
     public init(
         modeID: Int32,
@@ -34,7 +37,10 @@ public struct RawDisplayMode: Equatable, Sendable {
         pixelHeight: Int? = nil,
         refreshRate: Double = 60.0,
         isUsableForDesktopGUI: Bool = true,
-        isNative: Bool = false
+        isNative: Bool = false,
+        bitsPerSample: Int = 8,
+        isDefault: Bool = false,
+        isStretched: Bool = false
     ) {
         self.modeID = modeID
         self.width = width
@@ -44,6 +50,9 @@ public struct RawDisplayMode: Equatable, Sendable {
         self.refreshRate = refreshRate
         self.isUsableForDesktopGUI = isUsableForDesktopGUI
         self.isNative = isNative
+        self.bitsPerSample = bitsPerSample
+        self.isDefault = isDefault
+        self.isStretched = isStretched
     }
 }
 
@@ -84,6 +93,22 @@ public struct RawDisplayInfo: Equatable, Sendable {
     }
 }
 
+public enum ExpandedPopoverSection: Equatable, Sendable {
+    case displayMode(UInt32)
+    case refreshRate(UInt32)
+    case mainDisplay(UInt32)
+    case hotkeys
+
+    public var displayID: UInt32? {
+        switch self {
+        case .displayMode(let id), .refreshRate(let id), .mainDisplay(let id):
+            return id
+        case .hotkeys:
+            return nil
+        }
+    }
+}
+
 public struct DisplayModeOption: Equatable, Identifiable, Sendable {
     public var modeID: Int32
     public var width: Int
@@ -91,9 +116,14 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
     public var pixelWidth: Int
     public var pixelHeight: Int
     public var refreshRate: Double
+    public var bitsPerSample: Int
     public var isHiDPI: Bool
-    public var scalePercentage: Int
-    public var label: String
+    public var isDefault: Bool
+    public var isNative: Bool
+    public var aspectRatioLabel: String
+    public var refreshRateLabel: String?
+    public var colorDepthLabel: String
+    public var resolutionLabel: String
 
     public var id: Int32 { modeID }
 
@@ -104,9 +134,14 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
         pixelWidth: Int,
         pixelHeight: Int,
         refreshRate: Double,
+        bitsPerSample: Int,
         isHiDPI: Bool,
-        scalePercentage: Int,
-        label: String
+        isDefault: Bool,
+        isNative: Bool,
+        aspectRatioLabel: String,
+        refreshRateLabel: String?,
+        colorDepthLabel: String,
+        resolutionLabel: String
     ) {
         self.modeID = modeID
         self.width = width
@@ -114,9 +149,14 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.refreshRate = refreshRate
+        self.bitsPerSample = bitsPerSample
         self.isHiDPI = isHiDPI
-        self.scalePercentage = scalePercentage
-        self.label = label
+        self.isDefault = isDefault
+        self.isNative = isNative
+        self.aspectRatioLabel = aspectRatioLabel
+        self.refreshRateLabel = refreshRateLabel
+        self.colorDepthLabel = colorDepthLabel
+        self.resolutionLabel = resolutionLabel
     }
 }
 
@@ -144,9 +184,10 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
     public var brightness: Double
     public var brightnessBackend: BrightnessBackendUsed
     public var availableModes: [DisplayModeOption]
+    public var defaultMode: DisplayModeOption?
+    public var nativeMode: DisplayModeOption?
     public var currentModeID: Int32
     public var currentModeOption: DisplayModeOption?
-    public var previewModeID: Int32?
 
     public var id: UInt32 { displayID }
 
@@ -162,46 +203,11 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         Int((brightness * 100.0).rounded())
     }
 
-    public var activeOrPreviewMode: DisplayModeOption? {
-        if let previewModeID,
-            let preview = availableModes.first(where: { $0.modeID == previewModeID })
-        {
-            return preview
-        }
-        if let current = availableModes.first(where: { $0.modeID == currentModeID }) {
-            return current
-        }
-        if let currentModeOption {
-            return currentModeOption
-        }
-        return availableModes.first(where: { $0.scalePercentage == 100 }) ?? availableModes.last
-    }
-
-    public var activeOrPreviewModeIndex: Int? {
-        guard !availableModes.isEmpty else {
-            return nil
-        }
-        if let previewModeID,
-            let previewIndex = availableModes.firstIndex(where: { $0.modeID == previewModeID })
-        {
-            return previewIndex
-        }
-        if let currentIndex = availableModes.firstIndex(where: { $0.modeID == currentModeID }) {
-            return currentIndex
-        }
-        if let currentModeOption {
-            let targetArea = currentModeOption.width * currentModeOption.height
-            return availableModes.indices.min { lhs, rhs in
-                let lhsDiff = abs(availableModes[lhs].width * availableModes[lhs].height - targetArea)
-                let rhsDiff = abs(availableModes[rhs].width * availableModes[rhs].height - targetArea)
-                return lhsDiff < rhsDiff
-            }
-        }
-        return availableModes.firstIndex(where: { $0.scalePercentage == 100 }) ?? availableModes.indices.last
-    }
-
     public var resolutionLabel: String {
-        activeOrPreviewMode?.label ?? ""
+        if let current = availableModes.first(where: { $0.modeID == currentModeID }) {
+            return current.resolutionLabel
+        }
+        return currentModeOption?.resolutionLabel ?? ""
     }
 
     public init(
@@ -214,9 +220,10 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         brightness: Double = 1.0,
         brightnessBackend: BrightnessBackendUsed = .hardwareDDC,
         availableModes: [DisplayModeOption] = [],
+        defaultMode: DisplayModeOption? = nil,
+        nativeMode: DisplayModeOption? = nil,
         currentModeID: Int32 = 0,
-        currentModeOption: DisplayModeOption? = nil,
-        previewModeID: Int32? = nil
+        currentModeOption: DisplayModeOption? = nil
     ) {
         self.displayID = displayID
         self.name = name
@@ -227,8 +234,9 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         self.brightness = brightness
         self.brightnessBackend = brightnessBackend
         self.availableModes = availableModes
+        self.defaultMode = defaultMode
+        self.nativeMode = nativeMode
         self.currentModeID = currentModeID
         self.currentModeOption = currentModeOption
-        self.previewModeID = previewModeID
     }
 }

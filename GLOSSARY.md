@@ -44,9 +44,12 @@ _Avoid_: Physical resolution, panel native
 A Display Mode saved to one of a display's five quick-recall slots for one-click switching.
 _Avoid_: Preset, bookmark, saved resolution
 
+**ProMotion**:
+An Apple **Variable Refresh Rate** Display Mode reported natively by macOS (`SLSIsDisplayModeProMotion`), surfaced as `ProMotion` (`ProMotion (Variable)` in the Refresh Rate picker) rather than only a numeric Hz range.
+
 **Variable Refresh Rate**:
-A Display Mode whose refresh rate adapts dynamically across a supported frequency range (such as `48–120Hz`).
-_Avoid_: VRR, ProMotion, adaptive sync
+A Display Mode whose refresh rate adapts dynamically across a supported frequency range (such as `48–120Hz` on external adaptive displays).
+_Avoid_: VRR, adaptive sync
 
 **NTSC Refresh Rate**:
 A fractional broadcast-cadence refresh rate (such as `59.94Hz` or `119.88Hz`) when exposed by the display.

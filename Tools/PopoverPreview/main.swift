@@ -166,10 +166,10 @@ private func renderPreview() {
                 modes: [
                     RawDisplayMode(
                         modeID: 10, width: 1147, height: 745, pixelWidth: 2294, pixelHeight: 1490, refreshRate: 120.0, bitsPerSample: 10,
-                        isVariableRefreshRate: true, minRefreshRate: 24.0),
+                        isVariableRefreshRate: true, isProMotion: true, minRefreshRate: 24.0),
                     RawDisplayMode(
                         modeID: 11, width: 1352, height: 878, pixelWidth: 2704, pixelHeight: 1756, refreshRate: 120.0, bitsPerSample: 10,
-                        isVariableRefreshRate: true, minRefreshRate: 24.0),
+                        isVariableRefreshRate: true, isProMotion: true, minRefreshRate: 24.0),
                     RawDisplayMode(
                         modeID: 12,
                         width: 1512,
@@ -181,6 +181,7 @@ private func renderPreview() {
                         bitsPerSample: 10,
                         isDefault: true,
                         isVariableRefreshRate: true,
+                        isProMotion: true,
                         minRefreshRate: 24.0
                     ),
                     RawDisplayMode(
@@ -212,7 +213,7 @@ private func renderPreview() {
                     ),
                     RawDisplayMode(
                         modeID: 13, width: 1800, height: 1169, pixelWidth: 3600, pixelHeight: 2338, refreshRate: 120.0, bitsPerSample: 10,
-                        isVariableRefreshRate: true, minRefreshRate: 24.0),
+                        isVariableRefreshRate: true, isProMotion: true, minRefreshRate: 24.0),
                     RawDisplayMode(
                         modeID: 14, width: 3024, height: 1964, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0, isNative: true,
                         bitsPerSample: 10)
@@ -231,7 +232,7 @@ private func renderPreview() {
                     RawDisplayMode(
                         modeID: 21, width: 1600, height: 900, pixelWidth: 1600, pixelHeight: 900, refreshRate: 60.0, bitsPerSample: 8),
                     RawDisplayMode(
-                        modeID: 23, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 75.0, isNative: true,
+                        modeID: 23, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 50.0, isNative: true,
                         bitsPerSample: 8),
                     RawDisplayMode(
                         modeID: 22,

@@ -31,6 +31,7 @@ public struct RawDisplayMode: Equatable, Sendable {
     public var isStretched: Bool
     public var isMirroringOnly: Bool
     public var isVariableRefreshRate: Bool
+    public var isProMotion: Bool
     public var minRefreshRate: Double?
 
     public init(
@@ -47,6 +48,7 @@ public struct RawDisplayMode: Equatable, Sendable {
         isStretched: Bool = false,
         isMirroringOnly: Bool = false,
         isVariableRefreshRate: Bool = false,
+        isProMotion: Bool = false,
         minRefreshRate: Double? = nil
     ) {
         self.modeID = modeID
@@ -61,7 +63,8 @@ public struct RawDisplayMode: Equatable, Sendable {
         self.isDefault = isDefault
         self.isStretched = isStretched
         self.isMirroringOnly = isMirroringOnly
-        self.isVariableRefreshRate = isVariableRefreshRate
+        self.isVariableRefreshRate = isVariableRefreshRate || isProMotion
+        self.isProMotion = isProMotion
         self.minRefreshRate = minRefreshRate
     }
 }
@@ -246,29 +249,33 @@ public struct AspectRatioFilterKey: Codable, Equatable, Hashable, Sendable, Comp
     }
 }
 
-/// Typed filter key representing a Display Mode refresh rate (fixed Hz or Variable Refresh Rate range).
+/// Typed filter key representing a Display Mode refresh rate (fixed Hz, ProMotion, or Variable Refresh Rate range).
 public struct RefreshRateFilterKey: Codable, Equatable, Hashable, Sendable, Comparable {
     public let isVariableRefreshRate: Bool
+    public let isProMotion: Bool
     public let minHundredths: Int?
     public let maxHundredths: Int
 
     private enum CodingKeys: String, CodingKey {
         case isVariableRefreshRate
+        case isProMotion
         case minHundredths
         case maxHundredths
     }
 
     public init(
         isVariableRefreshRate: Bool = false,
+        isProMotion: Bool = false,
         minRefreshRate: Double? = nil,
         maxRefreshRate: Double
     ) {
         let normalized = DisplayModeFilter.normalizeVariableRefreshRate(
-            isVariableRefreshRate: isVariableRefreshRate,
+            isVariableRefreshRate: isVariableRefreshRate || isProMotion,
             minRefreshRate: minRefreshRate,
             maxRefreshRate: maxRefreshRate
         )
         self.isVariableRefreshRate = normalized.isVariableRefreshRate
+        self.isProMotion = normalized.isVariableRefreshRate && isProMotion
         self.maxHundredths = max(0, Int((maxRefreshRate * 100.0).rounded()))
         self.minHundredths = normalized.minRefreshRate.map { max(0, Int(($0 * 100.0).rounded())) }
     }
@@ -289,6 +296,7 @@ public struct RefreshRateFilterKey: Codable, Equatable, Hashable, Sendable, Comp
 
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let isVariable = try container.decode(Bool.self, forKey: .isVariableRefreshRate)
+        let isProMotion = try container.decodeIfPresent(Bool.self, forKey: .isProMotion) ?? false
         let maxHundredths = try container.decode(Int.self, forKey: .maxHundredths)
         let minHundredths = try container.decodeIfPresent(Int.self, forKey: .minHundredths)
         guard maxHundredths > 50 else {
@@ -300,6 +308,7 @@ public struct RefreshRateFilterKey: Codable, Equatable, Hashable, Sendable, Comp
         }
         self.init(
             isVariableRefreshRate: isVariable,
+            isProMotion: isProMotion,
             minRefreshRate: minHundredths.map { Double($0) / 100.0 },
             maxRefreshRate: Double(maxHundredths) / 100.0
         )
@@ -308,6 +317,9 @@ public struct RefreshRateFilterKey: Codable, Equatable, Hashable, Sendable, Comp
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(isVariableRefreshRate, forKey: .isVariableRefreshRate)
+        if isProMotion {
+            try container.encode(true, forKey: .isProMotion)
+        }
         try container.encodeIfPresent(minHundredths, forKey: .minHundredths)
         try container.encode(maxHundredths, forKey: .maxHundredths)
     }
@@ -316,8 +328,29 @@ public struct RefreshRateFilterKey: Codable, Equatable, Hashable, Sendable, Comp
         RefreshRateFilterKey(isVariableRefreshRate: false, minRefreshRate: nil, maxRefreshRate: refreshRate)
     }
 
-    public static func variable(min minRefreshRate: Double? = nil, max maxRefreshRate: Double) -> RefreshRateFilterKey {
-        RefreshRateFilterKey(isVariableRefreshRate: true, minRefreshRate: minRefreshRate, maxRefreshRate: maxRefreshRate)
+    public static func variable(
+        min minRefreshRate: Double? = nil,
+        max maxRefreshRate: Double,
+        isProMotion: Bool = false
+    ) -> RefreshRateFilterKey {
+        RefreshRateFilterKey(
+            isVariableRefreshRate: true,
+            isProMotion: isProMotion,
+            minRefreshRate: minRefreshRate,
+            maxRefreshRate: maxRefreshRate
+        )
+    }
+
+    public static func proMotion(
+        min minRefreshRate: Double? = 24.0,
+        max maxRefreshRate: Double = 120.0
+    ) -> RefreshRateFilterKey {
+        RefreshRateFilterKey(
+            isVariableRefreshRate: true,
+            isProMotion: true,
+            minRefreshRate: minRefreshRate,
+            maxRefreshRate: maxRefreshRate
+        )
     }
 
     public var maxRefreshRate: Double {
@@ -329,6 +362,9 @@ public struct RefreshRateFilterKey: Codable, Equatable, Hashable, Sendable, Comp
     }
 
     public var label: String {
+        if isProMotion {
+            return "ProMotion"
+        }
         guard let maxNumber = Self.formatRateNumber(hundredths: maxHundredths) else {
             return "—"
         }
@@ -347,6 +383,9 @@ public struct RefreshRateFilterKey: Codable, Equatable, Hashable, Sendable, Comp
     public static func < (lhs: RefreshRateFilterKey, rhs: RefreshRateFilterKey) -> Bool {
         if lhs.maxHundredths != rhs.maxHundredths {
             return lhs.maxHundredths < rhs.maxHundredths
+        }
+        if lhs.isProMotion != rhs.isProMotion {
+            return !lhs.isProMotion && rhs.isProMotion
         }
         if lhs.isVariableRefreshRate != rhs.isVariableRefreshRate {
             return !lhs.isVariableRefreshRate && rhs.isVariableRefreshRate
@@ -367,6 +406,10 @@ public struct RefreshRateFilterKey: Codable, Equatable, Hashable, Sendable, Comp
     static func parse(label: String) -> RefreshRateFilterKey? {
         var working = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !working.isEmpty else { return nil }
+
+        if working == "ProMotion" || working == "ProMotion (Variable)" {
+            return .proMotion()
+        }
 
         var hasVariableSuffix = false
         if working.hasSuffix(" (Variable)") {
@@ -576,6 +619,7 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
     public var isDefault: Bool
     public var isNative: Bool
     public var isVariableRefreshRate: Bool
+    public var isProMotion: Bool
     public var minRefreshRate: Double?
     public var aspectRatioKey: AspectRatioFilterKey
     public var refreshRateKey: RefreshRateFilterKey?
@@ -602,6 +646,7 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
         isDefault: Bool,
         isNative: Bool,
         isVariableRefreshRate: Bool = false,
+        isProMotion: Bool = false,
         minRefreshRate: Double? = nil,
         aspectRatioKey: AspectRatioFilterKey? = nil,
         refreshRateKey: RefreshRateFilterKey? = nil,
@@ -620,14 +665,16 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
         self.isHiDPI = isHiDPI
         self.isDefault = isDefault
         self.isNative = isNative
-        self.isVariableRefreshRate = isVariableRefreshRate
+        self.isVariableRefreshRate = isVariableRefreshRate || isProMotion
+        self.isProMotion = isProMotion
         self.minRefreshRate = minRefreshRate
         self.aspectRatioKey = aspectRatioKey ?? DisplayModeFilter.aspectRatioKey(width: width, height: height)
         self.refreshRateKey =
             refreshRateKey
             ?? (refreshRate > 0.5
                 ? RefreshRateFilterKey(
-                    isVariableRefreshRate: isVariableRefreshRate,
+                    isVariableRefreshRate: isVariableRefreshRate || isProMotion,
+                    isProMotion: isProMotion,
                     minRefreshRate: minRefreshRate,
                     maxRefreshRate: refreshRate
                 )
@@ -644,6 +691,7 @@ public struct RefreshRateOption: Equatable, Identifiable, Sendable {
     public var refreshRate: Double
     public var minRefreshRate: Double?
     public var isVariableRefreshRate: Bool
+    public var isProMotion: Bool
     public var isNTSC: Bool
     public var label: String
     public var shortLabel: String
@@ -655,6 +703,7 @@ public struct RefreshRateOption: Equatable, Identifiable, Sendable {
         refreshRate: Double,
         minRefreshRate: Double? = nil,
         isVariableRefreshRate: Bool = false,
+        isProMotion: Bool = false,
         isNTSC: Bool = false,
         label: String,
         shortLabel: String
@@ -662,7 +711,8 @@ public struct RefreshRateOption: Equatable, Identifiable, Sendable {
         self.modeID = modeID
         self.refreshRate = refreshRate
         self.minRefreshRate = minRefreshRate
-        self.isVariableRefreshRate = isVariableRefreshRate
+        self.isVariableRefreshRate = isVariableRefreshRate || isProMotion
+        self.isProMotion = isProMotion
         self.isNTSC = isNTSC
         self.label = label
         self.shortLabel = shortLabel
@@ -679,6 +729,7 @@ public struct FavoriteModeRecord: Codable, Equatable, Sendable {
     public var refreshRate: Double
     public var bitsPerSample: Int
     public var isVariableRefreshRate: Bool
+    public var isProMotion: Bool
     public var minRefreshRate: Double?
 
     private enum CodingKeys: String, CodingKey {
@@ -690,6 +741,7 @@ public struct FavoriteModeRecord: Codable, Equatable, Sendable {
         case refreshRate
         case bitsPerSample
         case isVariableRefreshRate
+        case isProMotion
         case minRefreshRate
     }
 
@@ -702,6 +754,7 @@ public struct FavoriteModeRecord: Codable, Equatable, Sendable {
         refreshRate: Double,
         bitsPerSample: Int,
         isVariableRefreshRate: Bool = false,
+        isProMotion: Bool = false,
         minRefreshRate: Double? = nil
     ) {
         self.modeID = modeID
@@ -711,7 +764,8 @@ public struct FavoriteModeRecord: Codable, Equatable, Sendable {
         self.pixelHeight = pixelHeight
         self.refreshRate = refreshRate
         self.bitsPerSample = bitsPerSample
-        self.isVariableRefreshRate = isVariableRefreshRate
+        self.isVariableRefreshRate = isVariableRefreshRate || isProMotion
+        self.isProMotion = isProMotion
         self.minRefreshRate = minRefreshRate
     }
 
@@ -725,6 +779,7 @@ public struct FavoriteModeRecord: Codable, Equatable, Sendable {
             refreshRate: mode.refreshRate,
             bitsPerSample: mode.bitsPerSample,
             isVariableRefreshRate: mode.isVariableRefreshRate,
+            isProMotion: mode.isProMotion,
             minRefreshRate: mode.minRefreshRate
         )
     }
@@ -738,7 +793,9 @@ public struct FavoriteModeRecord: Codable, Equatable, Sendable {
         pixelHeight = try container.decode(Int.self, forKey: .pixelHeight)
         refreshRate = try container.decode(Double.self, forKey: .refreshRate)
         bitsPerSample = try container.decode(Int.self, forKey: .bitsPerSample)
-        isVariableRefreshRate = try container.decodeIfPresent(Bool.self, forKey: .isVariableRefreshRate) ?? false
+        let decodedProMotion = try container.decodeIfPresent(Bool.self, forKey: .isProMotion) ?? false
+        isProMotion = decodedProMotion
+        isVariableRefreshRate = (try container.decodeIfPresent(Bool.self, forKey: .isVariableRefreshRate) ?? false) || decodedProMotion
         minRefreshRate = try container.decodeIfPresent(Double.self, forKey: .minRefreshRate)
     }
 

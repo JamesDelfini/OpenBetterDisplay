@@ -697,7 +697,11 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             if existing.refreshRate <= 0, skyLightMode.refreshRate > 0 {
                 existing.refreshRate = skyLightMode.refreshRate
             }
-            existing.isVariableRefreshRate = existing.isVariableRefreshRate || skyLightMode.isVariableRefreshRate
+            existing.isProMotion = existing.isProMotion || skyLightMode.isProMotion
+            existing.isVariableRefreshRate =
+                existing.isVariableRefreshRate
+                || skyLightMode.isVariableRefreshRate
+                || existing.isProMotion
             if let minRefreshRate = skyLightMode.minRefreshRate {
                 existing.minRefreshRate = minRefreshRate
             }
@@ -714,10 +718,10 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         maxRefreshRate: Double,
         isCurrentMode: Bool,
         activeScreenMaxRefreshInterval: TimeInterval?
-    ) -> (isVariableRefreshRate: Bool, minRefreshRate: Double?) {
+    ) -> (isVariableRefreshRate: Bool, isProMotion: Bool, minRefreshRate: Double?) {
         let effectiveIsVariable = isVariableRefreshRate || usesAdaptiveFloorFallback
         guard effectiveIsVariable else {
-            return (false, nil)
+            return (false, false, nil)
         }
 
         let normalized = DisplayModeFilter.normalizeVariableRefreshRate(
@@ -726,7 +730,7 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             maxRefreshRate: maxRefreshRate
         )
         if normalized.minRefreshRate != nil {
-            return normalized
+            return (true, usesAdaptiveFloorFallback, normalized.minRefreshRate)
         }
 
         if usesAdaptiveFloorFallback {
@@ -736,15 +740,15 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             {
                 let derivedMin = (1.0 / interval).rounded()
                 if derivedMin > 0.5, derivedMin < maxRefreshRate - 0.5 {
-                    return (true, derivedMin)
+                    return (true, true, derivedMin)
                 }
             }
             if maxRefreshRate > 24.5 {
-                return (true, 24.0)
+                return (true, true, 24.0)
             }
         }
 
-        return (true, nil)
+        return (true, usesAdaptiveFloorFallback, nil)
     }
 
     private func fetchDisplayModes(
@@ -844,6 +848,7 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                     activeScreenMaxRefreshInterval: activeScreenMaxRefreshInterval
                 )
                 parsed.isVariableRefreshRate = variableRate.isVariableRefreshRate
+                parsed.isProMotion = variableRate.isProMotion
                 parsed.minRefreshRate = variableRate.minRefreshRate
                 modes.append(parsed)
             }

@@ -3369,6 +3369,7 @@ final class DisplayCoordinatorTests: XCTestCase {
                 bitsPerSample: 10,
                 isDefault: true,
                 isVariableRefreshRate: true,
+                isProMotion: true,
                 minRefreshRate: 24.0
             ),
             RawDisplayMode(
@@ -3455,10 +3456,18 @@ final class DisplayCoordinatorTests: XCTestCase {
         let builtIn = coordinator.displays.first(where: { $0.displayID == 1 })
         let dellHiDPI = coordinator.displays.first(where: { $0.displayID == 3 })
 
-        // Built-in Display exposes ProMotion Variable Refresh Rate and all fixed/NTSC rates
+        // Built-in Display exposes ProMotion ("ProMotion" collapsed / filter chip, "ProMotion (Variable)" in Refresh Rate)
+        XCTAssertEqual(builtIn?.refreshRateLabel, "ProMotion")
+        XCTAssertEqual(builtIn?.currentModeOption?.refreshRateLabel, "ProMotion")
+        XCTAssertEqual(builtIn?.refreshRateOptions.first?.shortLabel, "ProMotion")
+        XCTAssertEqual(builtIn?.refreshRateOptions.first?.isProMotion, true)
         XCTAssertEqual(
             builtIn?.refreshRateOptions.map(\.label),
-            ["24–120Hz (Variable)", "60Hz", "50Hz", "48Hz", "59.94Hz", "47.95Hz"]
+            ["ProMotion (Variable)", "60Hz", "50Hz", "48Hz", "59.94Hz", "47.95Hz"]
+        )
+        XCTAssertEqual(
+            builtIn?.modeFilterState.availableOptions.refreshRates.map(\.label),
+            ["ProMotion", "60Hz", "59.94Hz", "50Hz", "48Hz", "47.95Hz"]
         )
 
         // At 1920x1080 HiDPI (modeID 49), DELL P2217H exposes only compatible 60Hz (matching macOS System Settings)
@@ -3473,6 +3482,107 @@ final class DisplayCoordinatorTests: XCTestCase {
         coordinator.selectDisplayMode(3, modeID: 21)
         let dellSXGA = coordinator.displays.first(where: { $0.displayID == 3 })
         XCTAssertEqual(dellSXGA?.refreshRateOptions.map(\.label), ["75Hz", "60Hz"])
+    }
+
+    func testProMotionFilterKeyAndFavoriteRecordPersistencePreserveProMotionDistinctFromGenericVRR() throws {
+        let suiteName = "OpenBetterDisplayTests.ProMotionPersistence.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let filterStore = UserDefaultsDisplayModeFilterStore(userDefaults: defaults)
+        let proMotionCriteria = DisplayModeFilterCriteria(
+            aspectRatios: [AspectRatioFilterKey(widthTenths: 154, heightTenths: 100)],
+            refreshRates: [.proMotion(min: 24, max: 120)],
+            colorDepths: [10],
+            scalingTiers: [.hiDPI]
+        )
+        filterStore.setModeFilter(proMotionCriteria, forKey: "builtin-promotion")
+        XCTAssertEqual(filterStore.modeFilter(forKey: "builtin-promotion"), proMotionCriteria)
+        XCTAssertNotEqual(RefreshRateFilterKey.proMotion(min: 24, max: 120), .variable(min: 24, max: 120))
+        XCTAssertEqual(RefreshRateFilterKey.proMotion(min: 24, max: 120).label, "ProMotion")
+        XCTAssertEqual(RefreshRateFilterKey.variable(min: 48, max: 120).label, "48–120Hz")
+
+        let legacyProMotionJSON = """
+            {"aspectRatios":["15.4:10"],"refreshRates":["ProMotion"],\
+            "colorDepths":[10],"scalingTiers":["hiDPI"]}
+            """
+        defaults.set(try XCTUnwrap(legacyProMotionJSON.data(using: .utf8)), forKey: "OpenBetterDisplay.displayModeFilter.pm-string")
+        XCTAssertEqual(filterStore.modeFilter(forKey: "pm-string"), proMotionCriteria)
+
+        let favoritesStore = UserDefaultsFavoriteModesStore(userDefaults: defaults)
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 54,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true,
+                isVariableRefreshRate: true,
+                isProMotion: true,
+                minRefreshRate: 24.0
+            )
+        ]
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 1,
+                name: "Built-in Display",
+                isBuiltIn: true,
+                isMain: true,
+                vendorID: 0x0610,
+                modelID: 0xA05E,
+                serialNumber: 0,
+                currentModeID: 54,
+                modes: modes
+            )
+        ])
+
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            favoriteModesStore: favoritesStore
+        )
+        coordinator.assignFavoriteMode(1, modeID: 54, slot: 1)
+        let savedSlot = coordinator.displays.first?.favoriteMode(forSlot: 1)
+        XCTAssertEqual(savedSlot?.record.isProMotion, true)
+        XCTAssertEqual(savedSlot?.record.fallbackModeOption.refreshRateLabel, "ProMotion")
+
+        // Reload with shifted modeID and verify ProMotion favorite resolves cleanly
+        let shiftedDriver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 1,
+                name: "Built-in Display",
+                isBuiltIn: true,
+                isMain: true,
+                vendorID: 0x0610,
+                modelID: 0xA05E,
+                serialNumber: 0,
+                currentModeID: 99,
+                modes: [
+                    RawDisplayMode(
+                        modeID: 99,
+                        width: 1512,
+                        height: 982,
+                        pixelWidth: 3024,
+                        pixelHeight: 1964,
+                        refreshRate: 120.0,
+                        isNative: true,
+                        bitsPerSample: 10,
+                        isDefault: true,
+                        isVariableRefreshRate: true,
+                        isProMotion: true,
+                        minRefreshRate: 24.0
+                    )
+                ]
+            )
+        ])
+        let reloaded = DisplayCoordinator(driver: shiftedDriver, favoriteModesStore: favoritesStore)
+        XCTAssertEqual(reloaded.displays.first?.favoriteMode(forSlot: 1)?.resolvedMode?.modeID, 99)
+        XCTAssertEqual(reloaded.displays.first?.favoriteMode(forSlot: 1)?.resolvedMode?.refreshRateLabel, "ProMotion")
     }
 }
 

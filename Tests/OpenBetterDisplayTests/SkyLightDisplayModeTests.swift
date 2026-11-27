@@ -443,6 +443,7 @@ final class SkyLightDisplayModeTests: XCTestCase {
                 bitsPerSample: 10,
                 isDefault: true,
                 isVariableRefreshRate: true,
+                isProMotion: true,
                 minRefreshRate: 24.0
             )
         ]
@@ -451,14 +452,16 @@ final class SkyLightDisplayModeTests: XCTestCase {
         XCTAssertEqual(merged.count, 2)
 
         XCTAssertEqual(merged[0].isVariableRefreshRate, true)
+        XCTAssertEqual(merged[0].isProMotion, false)
         XCTAssertEqual(merged[0].minRefreshRate ?? -1, 48.0, accuracy: 0.001)
 
         XCTAssertEqual(merged[1].isVariableRefreshRate, true)
+        XCTAssertEqual(merged[1].isProMotion, true)
         XCTAssertEqual(merged[1].minRefreshRate ?? -1, 24.0, accuracy: 0.001)
     }
 
     func testResolvesVariableRefreshRateMinRefreshRateWithActiveScreenFallbackAnd24HzFloor() {
-        // External Variable Refresh Rate mode (e.g. 48-120Hz) uses SkyLight minHz directly
+        // External Variable Refresh Rate mode (e.g. 48-120Hz) uses SkyLight minHz directly and is not ProMotion
         let externalVariableRate = MacOSDisplayDriver.resolveVariableRefreshRateMetadata(
             isVariableRefreshRate: true,
             usesAdaptiveFloorFallback: false,
@@ -468,6 +471,7 @@ final class SkyLightDisplayModeTests: XCTestCase {
             activeScreenMaxRefreshInterval: nil
         )
         XCTAssertEqual(externalVariableRate.isVariableRefreshRate, true)
+        XCTAssertEqual(externalVariableRate.isProMotion, false)
         XCTAssertEqual(externalVariableRate.minRefreshRate ?? -1, 48.0, accuracy: 0.001)
 
         // Built-in Variable Refresh Rate active mode where SkyLight returns minHz == maxHz (120.0) derives 24Hz from NSScreen.maximumRefreshInterval
@@ -480,6 +484,7 @@ final class SkyLightDisplayModeTests: XCTestCase {
             activeScreenMaxRefreshInterval: 1.0 / 24.0
         )
         XCTAssertEqual(activeBuiltInAdaptive.isVariableRefreshRate, true)
+        XCTAssertEqual(activeBuiltInAdaptive.isProMotion, true)
         XCTAssertEqual(activeBuiltInAdaptive.minRefreshRate ?? -1, 24.0, accuracy: 0.001)
 
         // Inactive Variable Refresh Rate mode ignores active NSScreen interval (which might be 60Hz) and falls back to 24Hz floor
@@ -492,6 +497,7 @@ final class SkyLightDisplayModeTests: XCTestCase {
             activeScreenMaxRefreshInterval: 1.0 / 60.0
         )
         XCTAssertEqual(inactiveBuiltInAdaptive.isVariableRefreshRate, true)
+        XCTAssertEqual(inactiveBuiltInAdaptive.isProMotion, true)
         XCTAssertEqual(inactiveBuiltInAdaptive.minRefreshRate ?? -1, 24.0, accuracy: 0.001)
 
         // Fixed mode stays non-Variable Refresh Rate with nil minRefreshRate
@@ -504,6 +510,7 @@ final class SkyLightDisplayModeTests: XCTestCase {
             activeScreenMaxRefreshInterval: 1.0 / 60.0
         )
         XCTAssertEqual(fixedMode.isVariableRefreshRate, false)
+        XCTAssertEqual(fixedMode.isProMotion, false)
         XCTAssertNil(fixedMode.minRefreshRate)
     }
 

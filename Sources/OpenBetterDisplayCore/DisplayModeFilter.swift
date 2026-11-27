@@ -51,6 +51,9 @@ public enum DisplayModeFilter {
                 minRefreshRate: rhs.minRefreshRate,
                 maxRefreshRate: rhs.refreshRate
             )
+            if lhs.isProMotion != rhs.isProMotion {
+                return lhs.isProMotion && !rhs.isProMotion
+            }
             if lhsVariable.isVariableRefreshRate != rhsVariable.isVariableRefreshRate {
                 return lhsVariable.isVariableRefreshRate && !rhsVariable.isVariableRefreshRate
             }
@@ -248,6 +251,7 @@ public enum DisplayModeFilter {
             && abs(mode.refreshRate - record.refreshRate) <= 0.05
             && mode.bitsPerSample == record.bitsPerSample
             && mode.isVariableRefreshRate == record.isVariableRefreshRate
+            && (!record.isProMotion || mode.isProMotion)
             && matchesMinRefreshRate(mode.minRefreshRate, record.minRefreshRate)
     }
 
@@ -262,6 +266,7 @@ public enum DisplayModeFilter {
                 refreshRate: record.refreshRate,
                 bitsPerSample: record.bitsPerSample,
                 isVariableRefreshRate: record.isVariableRefreshRate,
+                isProMotion: record.isProMotion,
                 minRefreshRate: record.minRefreshRate
             )
         )
@@ -283,15 +288,17 @@ public enum DisplayModeFilter {
         let isOneToOneNative = mode.isNative && mode.width == mode.pixelWidth && mode.height == mode.pixelHeight
         let bits = max(1, mode.bitsPerSample)
         let variableRate = normalizeVariableRefreshRate(
-            isVariableRefreshRate: mode.isVariableRefreshRate,
+            isVariableRefreshRate: mode.isVariableRefreshRate || mode.isProMotion,
             minRefreshRate: mode.minRefreshRate,
             maxRefreshRate: mode.refreshRate
         )
+        let isProMotion = mode.isProMotion && variableRate.isVariableRefreshRate
         let aspectKey = aspectRatioKey(width: mode.width, height: mode.height)
         let rateKey: RefreshRateFilterKey? =
             mode.refreshRate > 0.5
             ? RefreshRateFilterKey(
                 isVariableRefreshRate: variableRate.isVariableRefreshRate,
+                isProMotion: isProMotion,
                 minRefreshRate: variableRate.minRefreshRate,
                 maxRefreshRate: mode.refreshRate
             )
@@ -309,6 +316,7 @@ public enum DisplayModeFilter {
             isDefault: mode.isDefault,
             isNative: isOneToOneNative,
             isVariableRefreshRate: variableRate.isVariableRefreshRate,
+            isProMotion: isProMotion,
             minRefreshRate: variableRate.minRefreshRate,
             aspectRatioKey: aspectKey,
             refreshRateKey: rateKey,
@@ -316,6 +324,7 @@ public enum DisplayModeFilter {
             refreshRateLabel: formatShortRefreshRate(
                 refreshRate: mode.refreshRate,
                 isVariableRefreshRate: variableRate.isVariableRefreshRate,
+                isProMotion: isProMotion,
                 minRefreshRate: variableRate.minRefreshRate
             ),
             colorDepthLabel: "\(bits)bit",
@@ -343,6 +352,7 @@ public enum DisplayModeFilter {
                 mode.refreshRateKey
                 ?? RefreshRateFilterKey(
                     isVariableRefreshRate: mode.isVariableRefreshRate,
+                    isProMotion: mode.isProMotion,
                     minRefreshRate: mode.minRefreshRate,
                     maxRefreshRate: mode.refreshRate
                 )
@@ -359,6 +369,9 @@ public enum DisplayModeFilter {
         options.sort { lhs, rhs in
             if lhs.isNTSC != rhs.isNTSC {
                 return !lhs.isNTSC && rhs.isNTSC
+            }
+            if !lhs.isNTSC, lhs.isProMotion != rhs.isProMotion {
+                return lhs.isProMotion && !rhs.isProMotion
             }
             if !lhs.isNTSC, lhs.isVariableRefreshRate != rhs.isVariableRefreshRate {
                 return lhs.isVariableRefreshRate && !rhs.isVariableRefreshRate
@@ -602,24 +615,34 @@ public enum DisplayModeFilter {
 
     private static func makeRefreshRateOption(from mode: DisplayModeOption) -> RefreshRateOption {
         let variableRate = normalizeVariableRefreshRate(
-            isVariableRefreshRate: mode.isVariableRefreshRate,
+            isVariableRefreshRate: mode.isVariableRefreshRate || mode.isProMotion,
             minRefreshRate: mode.minRefreshRate,
             maxRefreshRate: mode.refreshRate
         )
+        let isProMotion = mode.isProMotion && variableRate.isVariableRefreshRate
         let isNTSC = isNTSCRefreshRate(mode.refreshRate, isVariableRefreshRate: variableRate.isVariableRefreshRate)
         let shortLabel =
             formatShortRefreshRate(
                 refreshRate: mode.refreshRate,
                 isVariableRefreshRate: variableRate.isVariableRefreshRate,
+                isProMotion: isProMotion,
                 minRefreshRate: variableRate.minRefreshRate
             ) ?? ""
-        let label = variableRate.isVariableRefreshRate ? "\(shortLabel) (Variable)" : shortLabel
+        let label: String
+        if isProMotion {
+            label = "ProMotion (Variable)"
+        } else if variableRate.isVariableRefreshRate {
+            label = "\(shortLabel) (Variable)"
+        } else {
+            label = shortLabel
+        }
 
         return RefreshRateOption(
             modeID: mode.modeID,
             refreshRate: mode.refreshRate,
             minRefreshRate: variableRate.minRefreshRate,
             isVariableRefreshRate: variableRate.isVariableRefreshRate,
+            isProMotion: isProMotion,
             isNTSC: isNTSC,
             label: label,
             shortLabel: shortLabel
@@ -634,14 +657,19 @@ public enum DisplayModeFilter {
     private static func formatShortRefreshRate(
         refreshRate: Double,
         isVariableRefreshRate: Bool,
+        isProMotion: Bool = false,
         minRefreshRate: Double?
     ) -> String? {
         guard refreshRate > 0.5 else { return nil }
         let key = RefreshRateFilterKey(
             isVariableRefreshRate: isVariableRefreshRate,
+            isProMotion: isProMotion,
             minRefreshRate: minRefreshRate,
             maxRefreshRate: refreshRate
         )
+        if key.isProMotion {
+            return key.label
+        }
         if key.isVariableRefreshRate,
             key.minHundredths == nil,
             let maxNumber = RefreshRateFilterKey.formatRateNumber(hundredths: key.maxHundredths)

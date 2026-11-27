@@ -4,7 +4,7 @@ import Foundation
 @MainActor
 public final class DisplayCoordinator: ObservableObject {
     @Published public private(set) var displays: [DisplayState] = []
-    @Published public private(set) var expandedDisplayID: UInt32?
+    @Published public private(set) var expandedSection: ExpandedPopoverSection?
     public var onRequestPopoverClose: (@MainActor () -> Void)?
 
     private struct DDCThrottleState {
@@ -76,21 +76,23 @@ public final class DisplayCoordinator: ObservableObject {
         setDisplayEnabled(displayID, enabled: !display.isEnabled)
     }
 
-    public func toggleExpandedDisplay(_ displayID: UInt32) {
-        if expandedDisplayID == displayID {
-            expandedDisplayID = nil
+    public func toggleExpandedSection(_ section: ExpandedPopoverSection) {
+        if expandedSection == section {
+            expandedSection = nil
             return
         }
-        guard let display = displays.first(where: { $0.displayID == displayID }),
-            display.isEnabled
-        else {
-            return
+        if let displayID = section.displayID {
+            guard let display = displays.first(where: { $0.displayID == displayID }),
+                display.isEnabled
+            else {
+                return
+            }
         }
-        expandedDisplayID = displayID
+        expandedSection = section
     }
 
     public func handlePopoverDidClose() {
-        expandedDisplayID = nil
+        expandedSection = nil
     }
 
     public func setDisplayEnabled(_ displayID: UInt32, enabled: Bool) {
@@ -143,7 +145,7 @@ public final class DisplayCoordinator: ObservableObject {
         else {
             return
         }
-        expandedDisplayID = nil
+        expandedSection = nil
         onRequestPopoverClose?()
         do {
             try driver.setMainDisplay(displayID)
@@ -236,6 +238,8 @@ public final class DisplayCoordinator: ObservableObject {
             let isMain = isEnabled && raw.isMain
             let canToggleOff = isEnabled && !isMain && enabledCount > 1
             let availableModes = DisplayModeFilter.filterModes(for: raw)
+            let defaultMode = DisplayModeFilter.resolveDefaultMode(for: raw, availableModes: availableModes)
+            let nativeMode = DisplayModeFilter.resolveNativeMode(for: raw, availableModes: availableModes)
             let currentModeOption = DisplayModeFilter.resolveCurrentModeOption(for: raw, availableModes: availableModes)
 
             let persistenceKey = Self.persistenceKey(for: raw)
@@ -263,6 +267,8 @@ public final class DisplayCoordinator: ObservableObject {
                 brightness: brightness,
                 brightnessBackend: backend,
                 availableModes: availableModes,
+                defaultMode: defaultMode,
+                nativeMode: nativeMode,
                 currentModeID: raw.currentModeID,
                 currentModeOption: currentModeOption
             )
@@ -271,8 +277,8 @@ public final class DisplayCoordinator: ObservableObject {
         persistenceKeysByDisplayID = updatedKeys
         knownEnabledDisplayIDs = currentEnabledIDs
 
-        if let expandedID = expandedDisplayID, !currentEnabledIDs.contains(expandedID) {
-            expandedDisplayID = nil
+        if let expandedDisplayID = expandedSection?.displayID, !currentEnabledIDs.contains(expandedDisplayID) {
+            expandedSection = nil
         }
     }
 
@@ -323,61 +329,58 @@ public final class DisplayCoordinator: ObservableObject {
         }
     }
 
-    public func previewResolution(_ displayID: UInt32, modeID: Int32) {
+    public func selectDisplayMode(_ displayID: UInt32, modeID: Int32) {
         guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
             displays[index].isEnabled
         else {
             return
         }
-        guard displays[index].availableModes.contains(where: { $0.modeID == modeID }) else {
-            return
-        }
-        displays[index].previewModeID = modeID
-    }
 
-    public func previewResolution(_ displayID: UInt32, stepIndex: Int) {
-        guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
-            displays[index].isEnabled
-        else {
+        let display = displays[index]
+        let isKnownMode =
+            display.availableModes.contains(where: { $0.modeID == modeID })
+            || display.defaultMode?.modeID == modeID
+            || display.nativeMode?.modeID == modeID
+        if !display.availableModes.isEmpty, !isKnownMode {
             return
         }
-        let modes = displays[index].availableModes
-        guard !modes.isEmpty else {
-            return
-        }
-        let clampedIndex = max(0, min(modes.count - 1, stepIndex))
-        displays[index].previewModeID = modes[clampedIndex].modeID
-    }
 
-    public func commitResolution(_ displayID: UInt32, modeID: Int32? = nil) {
-        guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
-            displays[index].isEnabled
-        else {
-            return
-        }
-        let targetModeID = modeID ?? displays[index].previewModeID
-        displays[index].previewModeID = nil
-
-        guard let targetModeID else {
-            return
-        }
-        if !displays[index].availableModes.isEmpty {
-            guard displays[index].availableModes.contains(where: { $0.modeID == targetModeID }) else {
-                return
-            }
-        }
-        guard targetModeID != displays[index].currentModeID else {
+        guard modeID != display.currentModeID else {
             return
         }
 
         do {
-            try driver.setDisplayMode(displayID, modeID: targetModeID)
-            displays[index].currentModeID = targetModeID
-            displays[index].currentModeOption = displays[index].availableModes.first(where: { $0.modeID == targetModeID })
-            lastKnownRawDisplays[displayID]?.currentModeID = targetModeID
+            try driver.setDisplayMode(displayID, modeID: modeID)
+            displays[index].currentModeID = modeID
+            displays[index].currentModeOption = resolveSelectedModeOption(
+                for: display,
+                modeID: modeID,
+                raw: lastKnownRawDisplays[displayID]
+            )
+            lastKnownRawDisplays[displayID]?.currentModeID = modeID
         } catch {
-            // Preserve currentModeID if macOS rejects the display mode switch.
+            // Preserve currentModeID and currentModeOption if macOS rejects the display mode switch.
         }
+    }
+
+    private func resolveSelectedModeOption(
+        for display: DisplayState,
+        modeID: Int32,
+        raw: RawDisplayInfo?
+    ) -> DisplayModeOption? {
+        if let option = display.availableModes.first(where: { $0.modeID == modeID }) {
+            return option
+        }
+        if display.defaultMode?.modeID == modeID {
+            return display.defaultMode
+        }
+        if display.nativeMode?.modeID == modeID {
+            return display.nativeMode
+        }
+        if let rawMode = raw?.modes.first(where: { $0.modeID == modeID }) {
+            return DisplayModeFilter.makeModeOption(mode: rawMode)
+        }
+        return display.currentModeOption
     }
 
     // MARK: - Private Brightness Helpers

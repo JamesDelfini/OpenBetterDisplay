@@ -24,7 +24,7 @@ format:
 	swift format --in-place --parallel --configuration .swift-format --recursive Sources Tests Tools
 
 preview:
-	CLANG_MODULE_CACHE_PATH=$(CLANG_MODULE_CACHE_PATH) SWIFTPM_MODULECACHE_OVERRIDE=$(SWIFTPM_MODULECACHE_OVERRIDE) swift run --disable-sandbox -Xswiftc -module-cache-path -Xswiftc $(SWIFTPM_MODULECACHE_OVERRIDE) PopoverPreview $(PREVIEW_OUT)
+	CLANG_MODULE_CACHE_PATH=$(CLANG_MODULE_CACHE_PATH) SWIFTPM_MODULECACHE_OVERRIDE=$(SWIFTPM_MODULECACHE_OVERRIDE) swift run --disable-sandbox -Xswiftc -module-cache-path -Xswiftc $(SWIFTPM_MODULECACHE_OVERRIDE) PopoverPreview $(PREVIEW_ARGS) $(PREVIEW_OUT)
 
 install-hooks:
 	./scripts/install-hooks.sh

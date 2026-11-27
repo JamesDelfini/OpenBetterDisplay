@@ -23,7 +23,11 @@ Verified on Apple Silicon (M4 Pro, `arm64`, macOS 26.7.3). All private symbols l
 
 - **Library:** `/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight`
 - **Symbols:** `CGSGetDisplayList`, `CGSConfigureDisplayEnabled`, `CGSGetNumberOfDisplayModes`, `CGSGetDisplayModeDescriptionOfLength`, `CGSGetCurrentDisplayMode`, `CGSConfigureDisplayMode`.
-- **Mode description layout (`SkyLightDisplayModeDescription`):** 212-byte little-endian struct (`0x00` modeNumber, `0x04` flags, `0x08` width, `0x0C` height, `0x10` depth, `0x24` intFreq, `0xBC` fixed-point 16.16 refresh rate, `0xC0` ioFlags, `0xC4` ioDisplayModeID, `0xC8` pixelWidth, `0xCC` pixelHeight, `0xD0` Float scale; `0x0200_0000` native flag).
+- **Mode description layout (`SkyLightDisplayModeDescription`):** 212-byte little-endian struct (`0x00` modeNumber, `0x04` flags, `0x08` width, `0x0C` height, `0x10` depth [reports `8` even on 10-bit modes], `0x1C` `UInt32` `bitsPerSample`, `0x24` intFreq, `0x30` `char[128]` null-terminated ASCII pixel encoding fallback e.g. `"--RRRRRRRRRRGGGGGGGGGGBBBBBBBBBB"`, `0xBC` fixed-point 16.16 refresh rate, `0xC0` ioFlags, `0xC4` ioDisplayModeID, `0xC8` pixelWidth, `0xCC` pixelHeight, `0xD0` Float scale).
+- **Flags & pixel encoding caveats:**
+  - `kDisplayModeDefaultFlag` (`0x0000_0004`) marks the factory **Default Mode** (`★`); `kDisplayModeStretchedFlag` (`0x0000_0800`) and `0x4000_0000` mark stretched/unsafe modes excluded from the **Display Mode** browser.
+  - `kDisplayModeNativeFlag` (`0x0200_0000`) is set on **both** 1x physical-grid modes and their 2x HiDPI pixel-doubled counterparts; identifying the 1:1 **Native Mode** (`≡`) requires `isNative && width == pixelWidth && height == pixelHeight`.
+  - `CGDisplayModeCopyPixelEncoding` (`CoreGraphics`) is a hardcoded stub on macOS 26 returning 8-bit `"--------RRRRRRRRGGGGGGGGBBBBBBBB"` for all modes; read `bitsPerSample` from SkyLight `+0x1C` (with `+0x30` fallback) and preserve it when merging SkyLight metadata onto `CGDisplayMode` entries.
 
 ## CoreDisplay & EDID Name Fallback
 

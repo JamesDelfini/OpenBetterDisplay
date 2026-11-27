@@ -5,7 +5,8 @@ import OpenBetterDisplayUI
 import SwiftUI
 
 private final class PreviewDisplayDriver: DisplayDriver, @unchecked Sendable {
-    private let displays: [RawDisplayInfo]
+    private var displays: [RawDisplayInfo]
+    private var disconnectedDisplays: [UInt32: RawDisplayInfo] = [:]
     private let brightnessByID: [UInt32: BrightnessReading]
 
     init(displays: [RawDisplayInfo], brightnessByID: [UInt32: BrightnessReading]) {
@@ -17,7 +18,20 @@ private final class PreviewDisplayDriver: DisplayDriver, @unchecked Sendable {
         displays
     }
 
-    func setDisplayEnabled(_ displayID: UInt32, enabled: Bool) throws {}
+    func setDisplayEnabled(_ displayID: UInt32, enabled: Bool) throws {
+        if enabled {
+            if var restored = disconnectedDisplays.removeValue(forKey: displayID) {
+                restored.isActive = true
+                displays.append(restored)
+            }
+        } else if let index = displays.firstIndex(where: { $0.displayID == displayID }) {
+            var removed = displays.remove(at: index)
+            removed.isActive = false
+            removed.isMain = false
+            disconnectedDisplays[displayID] = removed
+        }
+    }
+
     func setMainDisplay(_ displayID: UInt32) throws {}
 
     func getBrightness(_ displayID: UInt32) -> BrightnessReading {
@@ -41,13 +55,21 @@ private final class PreviewBrightnessStore: BrightnessPersistence, @unchecked Se
 private func renderPreview() {
     let args = Array(CommandLine.arguments.dropFirst())
     var outputPath = "/tmp/openbetterdisplay-preview.png"
-    var expandID: UInt32?
+    var expandMainID: UInt32?
+    var expandModeID: UInt32?
+    var disconnectID: UInt32?
 
     var index = 0
     while index < args.count {
         let arg = args[index]
         if arg == "--expanded", index + 1 < args.count, let id = UInt32(args[index + 1]) {
-            expandID = id
+            expandMainID = id
+            index += 2
+        } else if arg == "--expanded-mode", index + 1 < args.count, let id = UInt32(args[index + 1]) {
+            expandModeID = id
+            index += 2
+        } else if arg == "--disconnect", index + 1 < args.count, let id = UInt32(args[index + 1]) {
+            disconnectID = id
             index += 2
         } else if !arg.hasPrefix("--") {
             outputPath = arg
@@ -69,10 +91,26 @@ private func renderPreview() {
                 isMain: false,
                 currentModeID: 12,
                 modes: [
-                    RawDisplayMode(modeID: 10, width: 1147, height: 745, pixelWidth: 2294, pixelHeight: 1490),
-                    RawDisplayMode(modeID: 11, width: 1352, height: 878, pixelWidth: 2704, pixelHeight: 1756),
-                    RawDisplayMode(modeID: 12, width: 1512, height: 982, pixelWidth: 3024, pixelHeight: 1964, isNative: true),
-                    RawDisplayMode(modeID: 13, width: 1800, height: 1169, pixelWidth: 3600, pixelHeight: 2338)
+                    RawDisplayMode(
+                        modeID: 10, width: 1147, height: 745, pixelWidth: 2294, pixelHeight: 1490, refreshRate: 120.0, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 11, width: 1352, height: 878, pixelWidth: 2704, pixelHeight: 1756, refreshRate: 120.0, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 12,
+                        width: 1512,
+                        height: 982,
+                        pixelWidth: 3024,
+                        pixelHeight: 1964,
+                        refreshRate: 120.0,
+                        isNative: true,
+                        bitsPerSample: 10,
+                        isDefault: true
+                    ),
+                    RawDisplayMode(
+                        modeID: 13, width: 1800, height: 1169, pixelWidth: 3600, pixelHeight: 2338, refreshRate: 120.0, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 14, width: 3024, height: 1964, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0, isNative: true,
+                        bitsPerSample: 10)
                 ]
             ),
             RawDisplayInfo(
@@ -82,9 +120,21 @@ private func renderPreview() {
                 isMain: false,
                 currentModeID: 22,
                 modes: [
-                    RawDisplayMode(modeID: 20, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720),
-                    RawDisplayMode(modeID: 21, width: 1600, height: 900, pixelWidth: 1600, pixelHeight: 900),
-                    RawDisplayMode(modeID: 22, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, isNative: true)
+                    RawDisplayMode(
+                        modeID: 20, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60.0, bitsPerSample: 8),
+                    RawDisplayMode(
+                        modeID: 21, width: 1600, height: 900, pixelWidth: 1600, pixelHeight: 900, refreshRate: 60.0, bitsPerSample: 8),
+                    RawDisplayMode(
+                        modeID: 22,
+                        width: 1920,
+                        height: 1080,
+                        pixelWidth: 1920,
+                        pixelHeight: 1080,
+                        refreshRate: 60.0,
+                        isNative: true,
+                        bitsPerSample: 8,
+                        isDefault: true
+                    )
                 ]
             ),
             RawDisplayInfo(
@@ -92,13 +142,33 @@ private func renderPreview() {
                 name: "DELL U2725QE",
                 isBuiltIn: false,
                 isMain: true,
-                currentModeID: 32,
+                currentModeID: 33,
                 modes: [
-                    RawDisplayMode(modeID: 30, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160),
-                    RawDisplayMode(modeID: 31, width: 2304, height: 1296, pixelWidth: 4608, pixelHeight: 2592),
-                    RawDisplayMode(modeID: 32, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880),
-                    RawDisplayMode(modeID: 33, width: 3008, height: 1692, pixelWidth: 6016, pixelHeight: 3384),
-                    RawDisplayMode(modeID: 34, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, isNative: true)
+                    RawDisplayMode(
+                        modeID: 30, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, isNative: true,
+                        bitsPerSample: 10, isDefault: true),
+                    RawDisplayMode(
+                        modeID: 31, width: 2048, height: 1152, pixelWidth: 4096, pixelHeight: 2304, refreshRate: 120.0, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 32, width: 2304, height: 1296, pixelWidth: 4608, pixelHeight: 2592, refreshRate: 120.0, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 33, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 34, width: 2560, height: 1440, pixelWidth: 2560, pixelHeight: 1440, refreshRate: 60.0, bitsPerSample: 8),
+                    RawDisplayMode(
+                        modeID: 35, width: 3008, height: 1692, pixelWidth: 6016, pixelHeight: 3384, refreshRate: 120.0, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 36, width: 3200, height: 1800, pixelWidth: 6400, pixelHeight: 3600, refreshRate: 120.0, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 37, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, isNative: true,
+                        bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 38, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, isNative: true,
+                        bitsPerSample: 8),
+                    RawDisplayMode(
+                        modeID: 39, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60.0, bitsPerSample: 8),
+                    RawDisplayMode(
+                        modeID: 40, width: 960, height: 540, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 60.0, bitsPerSample: 8)
                 ]
             )
         ],
@@ -115,8 +185,14 @@ private func renderPreview() {
         ddcThrottleInterval: 0
     )
 
-    if let expandID {
-        coordinator.toggleExpandedDisplay(expandID)
+    if let disconnectID {
+        coordinator.setDisplayEnabled(disconnectID, enabled: false)
+    }
+
+    if let expandModeID {
+        coordinator.toggleExpandedSection(.displayMode(expandModeID))
+    } else if let expandMainID {
+        coordinator.toggleExpandedSection(.mainDisplay(expandMainID))
     }
 
     let previewSurface = DisplayPopoverView(coordinator: coordinator)

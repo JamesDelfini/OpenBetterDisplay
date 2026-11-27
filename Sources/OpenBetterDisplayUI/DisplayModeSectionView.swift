@@ -5,9 +5,11 @@ public struct DisplayModeSectionView: View {
     let display: DisplayState
     @ObservedObject var coordinator: DisplayCoordinator
     @State private var isHeaderHovering = false
+    @State private var isFilterButtonHovering = false
     @State private var measuredContentHeight: CGFloat?
 
-    private static let maxBrowserHeight: CGFloat = 240
+    private static let maxModesListHeight: CGFloat = 210
+    private static let maxModesListHeightWithFilter: CGFloat = 176
 
     public init(display: DisplayState, coordinator: DisplayCoordinator) {
         self.display = display
@@ -16,6 +18,10 @@ public struct DisplayModeSectionView: View {
 
     private var isExpanded: Bool {
         coordinator.expandedSection == .displayMode(display.displayID)
+    }
+
+    private var isFilterExpanded: Bool {
+        coordinator.expandedDisplayModeFilterDisplayID == display.displayID
     }
 
     public var body: some View {
@@ -91,52 +97,23 @@ public struct DisplayModeSectionView: View {
         .frame(width: 18, height: 16, alignment: .center)
     }
 
-    private var resolvedBrowserHeight: CGFloat {
-        min(measuredContentHeight ?? estimatedListHeight, Self.maxBrowserHeight)
+    private var resolvedModesListHeight: CGFloat {
+        let cap = isFilterExpanded ? Self.maxModesListHeightWithFilter : Self.maxModesListHeight
+        return min(measuredContentHeight ?? estimatedModesListHeight, cap)
     }
 
-    private var estimatedListHeight: CGFloat {
-        let hasPinned = display.defaultMode != nil || display.nativeMode != nil
-        let pinnedCount: Int
-        if let defaultMode = display.defaultMode, let nativeMode = display.nativeMode {
-            pinnedCount = defaultMode.modeID == nativeMode.modeID ? 1 : 2
-        } else {
-            pinnedCount = hasPinned ? 1 : 0
+    private var estimatedModesListHeight: CGFloat {
+        if display.filteredModes.isEmpty {
+            return 28
         }
-        let favoritesRows = max(1, display.favoriteModes.count)
-        let manageHeight: CGFloat = coordinator.managingFavoritesDisplayID == display.displayID ? 56.0 : 0.0
-        let sections = 1 + (hasPinned ? 1 : 0) + 1
-        let totalRows = favoritesRows + pinnedCount + max(1, display.availableModes.count)
-        let rowHeights = CGFloat(totalRows) * 23.5
-        let rowSpacing = CGFloat(max(0, totalRows - sections)) * 3.0
-        let headerHeights = CGFloat(sections) * 18.0
-        let dividerAndPadding: CGFloat = 15.0 + (hasPinned ? 15.0 : 0.0) + 16.0
-        return ceil(rowHeights + rowSpacing + headerHeights + dividerAndPadding + manageHeight)
-    }
-
-    private var browserList: some View {
-        ScrollView(.vertical, showsIndicators: true) {
-            modeListContent
-                .background(
-                    GeometryReader { geometry in
-                        Color.clear.preference(
-                            key: DisplayModeListHeightPreferenceKey.self,
-                            value: geometry.size.height
-                        )
-                    }
-                )
-        }
-        .frame(height: resolvedBrowserHeight)
-        .onPreferenceChange(DisplayModeListHeightPreferenceKey.self) { height in
-            if height > 0 {
-                measuredContentHeight = height
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        let rows = display.filteredModes.count
+        let rowHeights = CGFloat(rows) * 23.5
+        let rowSpacing = CGFloat(max(0, rows - 1)) * 3.0
+        return ceil(rowHeights + rowSpacing + 4.0)
     }
 
     @ViewBuilder
-    private var modeListContent: some View {
+    private var browserList: some View {
         VStack(alignment: .leading, spacing: 6) {
             DisplayModeFavoritesView(display: display, coordinator: coordinator)
 
@@ -149,7 +126,7 @@ public struct DisplayModeSectionView: View {
                 defaultAndNativeSection
             }
 
-            if hasDefaultOrNative, !display.availableModes.isEmpty {
+            if hasDefaultOrNative {
                 Divider()
                     .overlay(Color.white.opacity(0.08))
                     .padding(.vertical, 1)
@@ -206,21 +183,136 @@ public struct DisplayModeSectionView: View {
         }
     }
 
-    private var safeModesSection: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Available modes")
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.54))
-                .padding(.horizontal, 4)
+    private var filteredSectionTitle: String {
+        if display.modeFilterState.isShowingAll {
+            return "All available modes"
+        }
+        if display.modeFilterState.isCustomized {
+            return "Modes matching custom filter"
+        }
+        return "Available modes"
+    }
 
+    private var safeModesSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(filteredSectionTitle)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.54))
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                if !display.modeFilterState.availableOptions.isEmpty {
+                    filterToggleButton
+                }
+            }
+            .padding(.horizontal, 4)
+
+            if isFilterExpanded, !display.modeFilterState.availableOptions.isEmpty {
+                DisplayModeFilterView(
+                    displayID: display.displayID,
+                    filterState: display.modeFilterState,
+                    coordinator: coordinator
+                )
+            }
+
+            ScrollView(.vertical, showsIndicators: true) {
+                filteredModeRows
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: DisplayModeListHeightPreferenceKey.self,
+                                value: geometry.size.height
+                            )
+                        }
+                    )
+            }
+            .frame(height: resolvedModesListHeight)
+            .onPreferenceChange(DisplayModeListHeightPreferenceKey.self) { height in
+                if height > 0 {
+                    measuredContentHeight = height
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+
+    private var filterToggleButton: some View {
+        let isCustomized = display.modeFilterState.isCustomized
+        return Button {
+            coordinator.toggleDisplayModeFilter(display.displayID)
+        } label: {
+            HStack(spacing: 3.5) {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 8.5, weight: .semibold))
+                Text("Filter...")
+                    .font(.system(size: 10, weight: .medium))
+                if isCustomized, !isFilterExpanded {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 4.5, height: 4.5)
+                }
+            }
+            .foregroundStyle(.white.opacity(isFilterExpanded || isCustomized ? 0.94 : 0.72))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(
+                        isFilterExpanded
+                            ? Color.accentColor.opacity(isFilterButtonHovering ? 0.36 : 0.28)
+                            : Color.white.opacity(isFilterButtonHovering ? 0.14 : 0.08)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .strokeBorder(
+                                isFilterExpanded || isCustomized
+                                    ? Color.accentColor.opacity(0.55)
+                                    : Color.white.opacity(0.12),
+                                lineWidth: 0.7
+                            )
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isFilterButtonHovering = hovering
+        }
+        .help(isFilterExpanded ? "Hide display mode filters" : "Filter display modes")
+        .accessibilityLabel("Filter display modes")
+    }
+
+    @ViewBuilder
+    private var filteredModeRows: some View {
+        VStack(alignment: .leading, spacing: 3) {
             if display.availableModes.isEmpty {
                 Text("No safe 720p+ modes exposed")
                     .font(.system(size: 11.5, weight: .regular))
                     .foregroundStyle(.white.opacity(0.50))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
+            } else if display.filteredModes.isEmpty {
+                HStack(spacing: 6) {
+                    Text("No modes match current filter")
+                        .font(.system(size: 11.5, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.54))
+
+                    Spacer()
+
+                    if !isFilterExpanded {
+                        Button("Show All") {
+                            coordinator.showAllDisplayModes(display.displayID)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
             } else {
-                ForEach(display.availableModes) { mode in
+                ForEach(display.filteredModes) { mode in
                     DisplayModeRowView(
                         mode: mode,
                         isSelected: mode.modeID == display.currentModeID,

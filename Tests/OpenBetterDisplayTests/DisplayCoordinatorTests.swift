@@ -1818,6 +1818,835 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.expandedSection)
     }
 
+    func testDerivesDynamicFilterChipsAndTracksActiveRefreshRateAndColorDepthWhileUncustomized() {
+        let modes: [RawDisplayMode] = [
+            // Sub-720p & stretched modes should not contribute filter chips
+            RawDisplayMode(
+                modeID: 1,
+                width: 960,
+                height: 540,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 24.0,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 2,
+                width: 1280,
+                height: 1024,
+                pixelWidth: 1280,
+                pixelHeight: 1024,
+                refreshRate: 75.0,
+                bitsPerSample: 8,
+                isStretched: true
+            ),
+            // Safe >= 720p modes covering integer, Variable Refresh Rate, NTSC, 10bit/8bit, HiDPI/LoDPI, and multiple aspect ratios
+            RawDisplayMode(
+                modeID: 10,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVRR: true,
+                minRefreshRate: 48.0
+            ),
+            RawDisplayMode(
+                modeID: 11,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 12,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 13,
+                width: 3840,
+                height: 2160,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 14,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 59.94,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 15,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 59.94,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 16,
+                width: 1600,
+                height: 1200,
+                pixelWidth: 3200,
+                pixelHeight: 2400,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 17,
+                width: 2560,
+                height: 1080,
+                pixelWidth: 2560,
+                pixelHeight: 1080,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 30,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x10AC,
+                modelID: 0xD0B3,
+                serialNumber: 0xABCD_1234,
+                currentModeID: 12,
+                modes: modes
+            )
+        ])
+
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            modeFilterStore: InMemoryDisplayModeFilterStore()
+        )
+
+        guard let initialDisplay = coordinator.displays.first else {
+            XCTFail("Expected display")
+            return
+        }
+
+        // All safe >= 720p modes stay in availableModes
+        XCTAssertEqual(initialDisplay.availableModes.map(\.modeID), [13, 10, 12, 14, 17, 11, 15, 16])
+
+        // Filter chips derive exclusively from safe >= 720p modes (no 24Hz or 5:4/75Hz from excluded modes)
+        XCTAssertEqual(initialDisplay.modeFilterState.availableOptions.aspectRatios, ["4:3", "16:9", "21:9"])
+        XCTAssertEqual(initialDisplay.modeFilterState.availableOptions.refreshRates, ["48–120Hz", "120Hz", "60Hz", "59.94Hz"])
+        XCTAssertEqual(initialDisplay.modeFilterState.availableOptions.colorDepths, [10, 8])
+        XCTAssertEqual(initialDisplay.modeFilterState.availableOptions.scalingTiers, [.hiDPI, .loDPI])
+
+        // Uncustomized default tracks native aspect (16:9), active rate (120Hz), active color depth (10bit), preferred tier (HiDPI)
+        XCTAssertFalse(initialDisplay.modeFilterState.isCustomized)
+        XCTAssertEqual(
+            initialDisplay.modeFilterState.activeCriteria,
+            DisplayModeFilterCriteria(
+                aspectRatios: ["16:9"],
+                refreshRates: ["120Hz"],
+                colorDepths: [10],
+                scalingTiers: [.hiDPI]
+            )
+        )
+        XCTAssertEqual(initialDisplay.filteredModes.map(\.modeID), [12, 11])
+
+        // Switching to Native Mode (LoDPI at 120Hz 10bit) keeps preferred HiDPI tier and native aspect ratio
+        coordinator.selectDisplayMode(30, modeID: 13)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.scalingTiers, [.hiDPI])
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.aspectRatios, ["16:9"])
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [12, 11])
+
+        // Switching to a 59.94Hz 8bit mode updates active refresh rate & color depth while keeping 16:9 and HiDPI
+        coordinator.selectDisplayMode(30, modeID: 14)
+        XCTAssertEqual(
+            coordinator.displays.first?.modeFilterState.activeCriteria,
+            DisplayModeFilterCriteria(
+                aspectRatios: ["16:9"],
+                refreshRates: ["59.94Hz"],
+                colorDepths: [8],
+                scalingTiers: [.hiDPI]
+            )
+        )
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [14, 15])
+
+        // Switching to Variable Refresh Rate (48–120Hz, 10bit) updates dynamic filter to 48–120Hz & 10bit
+        coordinator.selectDisplayMode(30, modeID: 10)
+        XCTAssertEqual(
+            coordinator.displays.first?.modeFilterState.activeCriteria,
+            DisplayModeFilterCriteria(
+                aspectRatios: ["16:9"],
+                refreshRates: ["48–120Hz"],
+                colorDepths: [10],
+                scalingTiers: [.hiDPI]
+            )
+        )
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [10])
+    }
+
+    func testFilterChipPlainClickSoloSelectsWithinGroupWhileShiftClickMultiSelectsAcrossChips() {
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 100,
+                width: 3840,
+                height: 2160,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 101,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 102,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 103,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 60.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 104,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 2560,
+                pixelHeight: 1440,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 105,
+                width: 1600,
+                height: 1200,
+                pixelWidth: 3200,
+                pixelHeight: 2400,
+                refreshRate: 60.0,
+                bitsPerSample: 10
+            )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 30,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                currentModeID: 101,
+                modes: modes
+            ),
+            RawDisplayInfo(
+                displayID: 20,
+                name: "DELL P2217H",
+                isBuiltIn: false,
+                isMain: false,
+                isActive: false,
+                currentModeID: 200,
+                modes: [
+                    RawDisplayMode(
+                        modeID: 200,
+                        width: 1920,
+                        height: 1080,
+                        pixelWidth: 1920,
+                        pixelHeight: 1080,
+                        refreshRate: 60.0,
+                        isNative: true
+                    )
+                ]
+            )
+        ])
+
+        let store = InMemoryDisplayModeFilterStore()
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            modeFilterStore: store
+        )
+
+        let display30 = { coordinator.displays.first(where: { $0.displayID == 30 }) }
+
+        XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [101, 102])
+
+        // Plain click selects only 60Hz within refresh rates while preserving 16:9, 10bit, HiDPI
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("60Hz"), multiSelect: false)
+        XCTAssertEqual(display30()?.modeFilterState.isCustomized, true)
+        XCTAssertEqual(
+            display30()?.modeFilterState.activeCriteria,
+            DisplayModeFilterCriteria(
+                aspectRatios: ["16:9"],
+                refreshRates: ["60Hz"],
+                colorDepths: [10],
+                scalingTiers: [.hiDPI]
+            )
+        )
+        XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [103])
+
+        // Shift+click adds 120Hz alongside 60Hz
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("120Hz"), multiSelect: true)
+        XCTAssertEqual(display30()?.modeFilterState.activeCriteria.refreshRates, ["60Hz", "120Hz"])
+        XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [101, 103, 102])
+
+        // Shift+click adds 4:3 alongside 16:9, and LoDPI + 8bit
+        coordinator.selectDisplayModeFilterChip(30, chip: .aspectRatio("4:3"), multiSelect: true)
+        coordinator.selectDisplayModeFilterChip(30, chip: .scaling(.loDPI), multiSelect: true)
+        coordinator.selectDisplayModeFilterChip(30, chip: .colorDepth(8), multiSelect: true)
+        XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [100, 101, 103, 104, 102, 105])
+
+        // Plain click on 120Hz solo-selects 120Hz in refresh rates while keeping multi-selected aspect, depth, and scaling
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("120Hz"), multiSelect: false)
+        XCTAssertEqual(display30()?.modeFilterState.activeCriteria.refreshRates, ["120Hz"])
+        XCTAssertEqual(display30()?.modeFilterState.activeCriteria.aspectRatios, ["16:9", "4:3"])
+        XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [100, 101, 102])
+
+        // Shift+clicking the sole selected chip in a group toggles it off, leaving that group unrestricted
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("120Hz"), multiSelect: true)
+        XCTAssertEqual(display30()?.modeFilterState.activeCriteria.refreshRates, [])
+        XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [100, 101, 103, 104, 102, 105])
+
+        // Disconnected Display ignores chip toggles
+        coordinator.selectDisplayModeFilterChip(20, chip: .refreshRate("60Hz"), multiSelect: false)
+        XCTAssertNil(store.modeFilter(forKey: "display:20"))
+    }
+
+    func testShowAllResetDefaultAndSelectingFilteredOutSafeModes() {
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 100,
+                width: 3840,
+                height: 2160,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 101,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 102,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 103,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 2560,
+                pixelHeight: 1440,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 104,
+                width: 1600,
+                height: 1200,
+                pixelWidth: 1600,
+                pixelHeight: 1200,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 30,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                currentModeID: 101,
+                modes: modes
+            )
+        ])
+
+        let store = InMemoryDisplayModeFilterStore()
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            modeFilterStore: store
+        )
+
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [101, 102])
+
+        // Show All reveals all safe >= 720p modes
+        coordinator.showAllDisplayModes(30)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.isCustomized, true)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.isShowingAll, true)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria, .unrestricted)
+        XCTAssertEqual(
+            coordinator.displays.first?.filteredModes.map(\.modeID),
+            coordinator.displays.first?.availableModes.map(\.modeID)
+        )
+
+        // Restricting a single group after Show All filters only by that group
+        coordinator.selectDisplayModeFilterChip(30, chip: .colorDepth(8), multiSelect: false)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.isShowingAll, false)
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [103, 104])
+
+        // Selecting a safe mode that is currently filtered out (Native 100 or Default 102) still succeeds
+        coordinator.selectDisplayMode(30, modeID: 100)
+        XCTAssertEqual(driver.setModeHistory.last?.modeID, 100)
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 100)
+        XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "3840x2160")
+        // Custom filter stays pinned on 8bit across the mode switch
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [103, 104])
+
+        // Reset Default clears custom filter and tracks current mode (120Hz, 10bit) + native aspect (16:9) + preferred tier (HiDPI)
+        coordinator.resetDisplayModeFilter(30)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.isCustomized, false)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.isShowingAll, false)
+        XCTAssertEqual(
+            coordinator.displays.first?.modeFilterState.activeCriteria,
+            DisplayModeFilterCriteria(
+                aspectRatios: ["16:9"],
+                refreshRates: ["120Hz"],
+                colorDepths: [10],
+                scalingTiers: [.hiDPI]
+            )
+        )
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [101, 102])
+        XCTAssertNil(store.modeFilter(forKey: "display:30"))
+    }
+
+    func testPersistsCustomDisplayModeFilterPerPhysicalDisplayAcrossRefreshRateChangesAndRestarts() {
+        let builtInModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 10,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 11,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 59.94,
+                bitsPerSample: 10
+            )
+        ]
+
+        let dellModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 30,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 31,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 32,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 2560,
+                pixelHeight: 1440,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 33,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 1,
+                name: "Built-in Display",
+                isBuiltIn: true,
+                isMain: false,
+                currentModeID: 10,
+                modes: builtInModes
+            ),
+            RawDisplayInfo(
+                displayID: 30,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x10AC,
+                modelID: 0xD0B3,
+                serialNumber: 0x0001_0002,
+                currentModeID: 30,
+                modes: dellModes
+            )
+        ])
+
+        let store = InMemoryDisplayModeFilterStore()
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            modeFilterStore: store
+        )
+
+        // Customize DELL U2725QE to 60Hz + 8bit + LoDPI; keep Built-in Display uncustomized
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("60Hz"), multiSelect: false)
+        coordinator.selectDisplayModeFilterChip(30, chip: .colorDepth(8), multiSelect: false)
+        coordinator.selectDisplayModeFilterChip(30, chip: .scaling(.loDPI), multiSelect: false)
+
+        // External refresh-rate switch + reconfiguration keeps DELL custom filter, while Built-in tracks 59.94Hz dynamically
+        driver.onlineDisplays[0].currentModeID = 11
+        driver.onlineDisplays[1].currentModeID = 31
+        coordinator.handleDisplayReconfiguration()
+
+        let builtInAfterSwitch = coordinator.displays.first(where: { $0.displayID == 1 })
+        let dellAfterSwitch = coordinator.displays.first(where: { $0.displayID == 30 })
+        XCTAssertEqual(builtInAfterSwitch?.modeFilterState.isCustomized, false)
+        XCTAssertEqual(builtInAfterSwitch?.modeFilterState.activeCriteria.refreshRates, ["59.94Hz"])
+        XCTAssertEqual(dellAfterSwitch?.modeFilterState.isCustomized, true)
+        XCTAssertEqual(dellAfterSwitch?.filteredModes.map(\.modeID), [32, 33])
+
+        // Simulate app relaunch where macOS reassigned DELL displayID from 30 to 45 (same physical hardware serial)
+        let relaunchedDriver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 1,
+                name: "Built-in Display",
+                isBuiltIn: true,
+                isMain: false,
+                currentModeID: 10,
+                modes: builtInModes
+            ),
+            RawDisplayInfo(
+                displayID: 45,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x10AC,
+                modelID: 0xD0B3,
+                serialNumber: 0x0001_0002,
+                currentModeID: 31,
+                modes: dellModes
+            )
+        ])
+
+        let relaunchedCoordinator = DisplayCoordinator(
+            driver: relaunchedDriver,
+            brightnessStore: InMemoryBrightnessStore(),
+            modeFilterStore: store
+        )
+
+        let relaunchedBuiltIn = relaunchedCoordinator.displays.first(where: { $0.displayID == 1 })
+        let relaunchedDell = relaunchedCoordinator.displays.first(where: { $0.displayID == 45 })
+        XCTAssertEqual(relaunchedBuiltIn?.modeFilterState.isCustomized, false)
+        XCTAssertEqual(relaunchedBuiltIn?.modeFilterState.activeCriteria.refreshRates, ["120Hz"])
+        XCTAssertEqual(relaunchedDell?.modeFilterState.isCustomized, true)
+        XCTAssertEqual(
+            relaunchedDell?.modeFilterState.activeCriteria,
+            DisplayModeFilterCriteria(
+                aspectRatios: ["16:9"],
+                refreshRates: ["60Hz"],
+                colorDepths: [8],
+                scalingTiers: [.loDPI]
+            )
+        )
+        XCTAssertEqual(relaunchedDell?.filteredModes.map(\.modeID), [32, 33])
+
+        // Reset Default on relaunched display clears persistence so next launch starts uncustomized
+        relaunchedCoordinator.resetDisplayModeFilter(45)
+        XCTAssertEqual(relaunchedCoordinator.displays.first(where: { $0.displayID == 45 })?.modeFilterState.isCustomized, false)
+        XCTAssertNil(store.modeFilter(forKey: "hardware:10AC:D0B3:00010002"))
+    }
+
+    func testUserDefaultsDisplayModeFilterStoreRoundTripsCustomAndShowAllFiltersAndClearsOnReset() throws {
+        let suiteName = "OpenBetterDisplayTests.ModeFilter.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = UserDefaultsDisplayModeFilterStore(userDefaults: defaults)
+        XCTAssertNil(store.modeFilter(forKey: "hardware:10AC:D0B3:00010002"))
+
+        let custom = DisplayModeFilterCriteria(
+            aspectRatios: ["16:9", "16:10"],
+            refreshRates: ["48–120Hz", "59.94Hz"],
+            colorDepths: [10],
+            scalingTiers: [.hiDPI]
+        )
+        store.setModeFilter(custom, forKey: "hardware:10AC:D0B3:00010002")
+        XCTAssertEqual(store.modeFilter(forKey: "hardware:10AC:D0B3:00010002"), custom)
+
+        // Show All (.unrestricted) must still persist distinctly from nil (uncustomized)
+        store.setModeFilter(.unrestricted, forKey: "builtin")
+        XCTAssertEqual(store.modeFilter(forKey: "builtin"), .unrestricted)
+
+        // Reset Default removes persisted entry
+        store.setModeFilter(nil, forKey: "hardware:10AC:D0B3:00010002")
+        XCTAssertNil(store.modeFilter(forKey: "hardware:10AC:D0B3:00010002"))
+        XCTAssertEqual(store.modeFilter(forKey: "builtin"), .unrestricted)
+    }
+
+    func testDisplayModeFilterPanelExpansionLifecycleMatchesAccordionDisconnectAndPopoverClose() {
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
+            RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: false),
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true)
+        ])
+
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            modeFilterStore: InMemoryDisplayModeFilterStore()
+        )
+        XCTAssertNil(coordinator.expandedDisplayModeFilterDisplayID)
+
+        // Opening filter for an Enabled Display expands both its Display Mode section and Filter panel
+        coordinator.toggleDisplayModeFilter(30)
+        XCTAssertEqual(coordinator.expandedSection, .displayMode(30))
+        XCTAssertEqual(coordinator.expandedDisplayModeFilterDisplayID, 30)
+
+        // Toggling again collapses Filter panel while keeping Display Mode section open
+        coordinator.toggleDisplayModeFilter(30)
+        XCTAssertEqual(coordinator.expandedSection, .displayMode(30))
+        XCTAssertNil(coordinator.expandedDisplayModeFilterDisplayID)
+
+        // Switching expandedSection to another section or closing Display Mode auto-collapses Filter panel
+        coordinator.toggleDisplayModeFilter(30)
+        XCTAssertEqual(coordinator.expandedDisplayModeFilterDisplayID, 30)
+        coordinator.toggleExpandedSection(.mainDisplay(30))
+        XCTAssertNil(coordinator.expandedDisplayModeFilterDisplayID)
+
+        // Disconnecting the display collapses both expandedSection and Filter panel
+        coordinator.toggleDisplayModeFilter(20)
+        XCTAssertEqual(coordinator.expandedDisplayModeFilterDisplayID, 20)
+        coordinator.setDisplayEnabled(20, enabled: false)
+        XCTAssertNil(coordinator.expandedSection)
+        XCTAssertNil(coordinator.expandedDisplayModeFilterDisplayID)
+
+        // Disconnected Display ignores toggleDisplayModeFilter
+        coordinator.toggleDisplayModeFilter(20)
+        XCTAssertNil(coordinator.expandedDisplayModeFilterDisplayID)
+
+        // Popover close collapses Filter panel
+        coordinator.toggleDisplayModeFilter(30)
+        XCTAssertEqual(coordinator.expandedDisplayModeFilterDisplayID, 30)
+        coordinator.handlePopoverDidClose()
+        XCTAssertNil(coordinator.expandedDisplayModeFilterDisplayID)
+    }
+
+    func testStandard1080pDisplayTracksLoDPIPreferredTierAndHandlesStalePersistedFilterChipsGracefully() {
+        let dell1080Modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 1,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 75.0,
+                isNative: true,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 2,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 60.0,
+                isNative: true,
+                bitsPerSample: 8,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 3,
+                width: 1600,
+                height: 900,
+                pixelWidth: 1600,
+                pixelHeight: 900,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 4,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            )
+        ]
+
+        let store = InMemoryDisplayModeFilterStore(initialFilters: [
+            // Stale 120Hz selection on a 75Hz/60Hz-only display falls back to unrestricted refresh rate while keeping LoDPI
+            "display:20": DisplayModeFilterCriteria(
+                aspectRatios: ["16:9"],
+                refreshRates: ["120Hz"],
+                colorDepths: [8],
+                scalingTiers: [.loDPI]
+            )
+        ])
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 20,
+                name: "DELL P2217H",
+                isBuiltIn: false,
+                isMain: true,
+                currentModeID: 2,
+                modes: dell1080Modes
+            )
+        ])
+
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            modeFilterStore: store
+        )
+
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [1, 2, 3])
+
+        // Resetting returns to uncustomized LoDPI + 60Hz default, then follows 75Hz switch while keeping LoDPI
+        coordinator.resetDisplayModeFilter(20)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.scalingTiers, [.loDPI])
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [2, 3])
+
+        coordinator.selectDisplayMode(20, modeID: 1)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.refreshRates, ["75Hz"])
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.scalingTiers, [.loDPI])
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [1])
+    }
+
+    func testProMotionDerivesRangeChipAndSelectRefreshRateSyncsUncustomizedFilter() {
+        let builtInModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 10,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true,
+                isVRR: true,
+                isProMotion: true,
+                minRefreshRate: nil
+            ),
+            RawDisplayMode(
+                modeID: 11,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 12,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 59.94,
+                bitsPerSample: 10
+            )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 1,
+                name: "Built-in Display",
+                isBuiltIn: true,
+                isMain: true,
+                currentModeID: 10,
+                modes: builtInModes
+            )
+        ])
+
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            modeFilterStore: InMemoryDisplayModeFilterStore()
+        )
+
+        XCTAssertEqual(
+            coordinator.displays.first?.modeFilterState.availableOptions.refreshRates,
+            ["24–120Hz", "120Hz", "59.94Hz"]
+        )
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.refreshRates, ["24–120Hz"])
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [10])
+
+        // Switching via Refresh Rate picker updates uncustomized dynamic filter chip too
+        coordinator.selectRefreshRate(1, modeID: 12)
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.refreshRates, ["59.94Hz"])
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [12])
+
+        // Filtering explicitly by 24–120Hz selects the ProMotion mode even while 59.94Hz is active
+        coordinator.selectDisplayModeFilterChip(1, chip: .refreshRate("24–120Hz"), multiSelect: false)
+        XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [10])
+    }
+
     func testAssigningCurrentDisplayModeToFavoriteSlotPopulatesDisplayStateAndValidatesSlotBounds() {
         let modes: [RawDisplayMode] = [
             RawDisplayMode(

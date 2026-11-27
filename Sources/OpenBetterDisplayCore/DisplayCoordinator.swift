@@ -6,11 +6,19 @@ public final class DisplayCoordinator: ObservableObject {
     @Published public private(set) var displays: [DisplayState] = []
     @Published public private(set) var expandedSection: ExpandedPopoverSection? {
         didSet {
-            if let managingID = managingFavoritesDisplayID, expandedSection != .displayMode(managingID) {
+            if let filterDisplayID = expandedDisplayModeFilterDisplayID,
+                expandedSection != .displayMode(filterDisplayID)
+            {
+                expandedDisplayModeFilterDisplayID = nil
+            }
+            if let managingID = managingFavoritesDisplayID,
+                expandedSection != .displayMode(managingID)
+            {
                 managingFavoritesDisplayID = nil
             }
         }
     }
+    @Published public private(set) var expandedDisplayModeFilterDisplayID: UInt32?
     @Published public private(set) var managingFavoritesDisplayID: UInt32?
     @Published public private(set) var hotkeyPreferences: HotkeyPreferences
     @Published public private(set) var keyboardCheckerStatus: KeyboardCheckerStatus = KeyboardCheckerStatus()
@@ -35,6 +43,7 @@ public final class DisplayCoordinator: ObservableObject {
     private let driver: DisplayDriver
     private let brightnessStore: BrightnessPersistence
     private let favoriteModesStore: FavoriteModesPersistence
+    private let modeFilterStore: DisplayModeFilterPersistence
     private let ddcThrottleInterval: TimeInterval
     private let writeScheduler: BrightnessWriteScheduling
     private let hotkeyGateway: BrightnessHotkeyGateway?
@@ -55,12 +64,14 @@ public final class DisplayCoordinator: ObservableObject {
         favoriteModesStore: FavoriteModesPersistence = UserDefaultsFavoriteModesStore(),
         ddcThrottleInterval: TimeInterval = 0.06,
         writeScheduler: BrightnessWriteScheduling? = nil,
+        modeFilterStore: DisplayModeFilterPersistence = UserDefaultsDisplayModeFilterStore(),
         hotkeyGateway: BrightnessHotkeyGateway? = nil,
         hotkeyPreferencesStore: HotkeyPreferencesPersistence = UserDefaultsHotkeyPreferencesStore()
     ) {
         self.driver = driver
         self.brightnessStore = brightnessStore
         self.favoriteModesStore = favoriteModesStore
+        self.modeFilterStore = modeFilterStore
         self.ddcThrottleInterval = max(0, ddcThrottleInterval)
         self.writeScheduler = writeScheduler ?? MainQueueBrightnessWriteScheduler()
         self.hotkeyGateway = hotkeyGateway
@@ -121,6 +132,23 @@ public final class DisplayCoordinator: ObservableObject {
 
     public func handlePopoverDidClose() {
         expandedSection = nil
+        expandedDisplayModeFilterDisplayID = nil
+        managingFavoritesDisplayID = nil
+    }
+
+    public func toggleDisplayModeFilter(_ displayID: UInt32) {
+        guard let display = displays.first(where: { $0.displayID == displayID }),
+            display.isEnabled
+        else {
+            return
+        }
+
+        if expandedDisplayModeFilterDisplayID == displayID {
+            expandedDisplayModeFilterDisplayID = nil
+        } else {
+            expandedSection = .displayMode(displayID)
+            expandedDisplayModeFilterDisplayID = displayID
+        }
     }
 
     public func toggleManageFavorites(for displayID: UInt32) {
@@ -293,6 +321,15 @@ public final class DisplayCoordinator: ObservableObject {
                 availableModes: availableModes
             )
 
+            let filterResolution = resolveFilterState(
+                for: raw,
+                availableModes: availableModes,
+                defaultMode: defaultMode,
+                nativeMode: nativeMode,
+                currentModeOption: currentModeOption,
+                persistenceKey: persistenceKey
+            )
+
             let (brightness, backend) = resolveBrightnessState(
                 for: raw,
                 isEnabled: isEnabled,
@@ -315,6 +352,8 @@ public final class DisplayCoordinator: ObservableObject {
                 brightness: brightness,
                 brightnessBackend: backend,
                 availableModes: availableModes,
+                filteredModes: filterResolution.filteredModes,
+                modeFilterState: filterResolution.filterState,
                 defaultMode: defaultMode,
                 nativeMode: nativeMode,
                 favoriteModes: favoriteModes,
@@ -433,17 +472,102 @@ public final class DisplayCoordinator: ObservableObject {
 
         do {
             try driver.setDisplayMode(displayID, modeID: modeID)
-            displays[index].currentModeID = modeID
-            displays[index].currentModeOption = resolveSelectedModeOption(
+            let updatedOption = resolveSelectedModeOption(
                 for: display,
                 modeID: modeID,
                 knownOption: knownOption,
                 raw: lastKnownRawDisplays[displayID]
             )
+            displays[index].currentModeID = modeID
+            displays[index].currentModeOption = updatedOption
             lastKnownRawDisplays[displayID]?.currentModeID = modeID
+
+            if let persistenceKey = persistenceKeysByDisplayID[displayID] {
+                applyUpdatedFilterState(at: index, persistenceKey: persistenceKey)
+            }
         } catch {
             // Preserve currentModeID and currentModeOption if macOS rejects the display mode switch.
         }
+    }
+
+    private func resolveFilterState(
+        for raw: RawDisplayInfo,
+        availableModes: [DisplayModeOption],
+        defaultMode: DisplayModeOption?,
+        nativeMode: DisplayModeOption?,
+        currentModeOption: DisplayModeOption?,
+        persistenceKey: String
+    ) -> (filteredModes: [DisplayModeOption], filterState: DisplayModeFilterState) {
+        DisplayModeFilter.resolveFilteredModes(
+            for: raw,
+            availableModes: availableModes,
+            defaultMode: defaultMode,
+            nativeMode: nativeMode,
+            currentModeOption: currentModeOption,
+            persistedCriteria: modeFilterStore.modeFilter(forKey: persistenceKey)
+        )
+    }
+
+    public func selectDisplayModeFilterChip(
+        _ displayID: UInt32,
+        chip: DisplayModeFilterChip,
+        multiSelect: Bool = false
+    ) {
+        guard let display = displays.first(where: { $0.displayID == displayID }),
+            display.modeFilterState.availableOptions.contains(chip)
+        else {
+            return
+        }
+        mutateDisplayModeFilter(for: displayID) { current in
+            DisplayModeFilter.updatedCriteria(
+                from: current.modeFilterState.activeCriteria,
+                selecting: chip,
+                multiSelect: multiSelect
+            )
+        }
+    }
+
+    public func showAllDisplayModes(_ displayID: UInt32) {
+        mutateDisplayModeFilter(for: displayID) { _ in
+            .unrestricted
+        }
+    }
+
+    public func resetDisplayModeFilter(_ displayID: UInt32) {
+        mutateDisplayModeFilter(for: displayID) { _ in
+            nil
+        }
+    }
+
+    private func mutateDisplayModeFilter(
+        for displayID: UInt32,
+        transform: (DisplayState) -> DisplayModeFilterCriteria?
+    ) {
+        guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
+            displays[index].isEnabled,
+            let persistenceKey = persistenceKeysByDisplayID[displayID]
+        else {
+            return
+        }
+
+        let nextCriteria = transform(displays[index])
+        modeFilterStore.setModeFilter(nextCriteria, forKey: persistenceKey)
+        applyUpdatedFilterState(at: index, persistenceKey: persistenceKey)
+    }
+
+    private func applyUpdatedFilterState(at index: Int, persistenceKey: String) {
+        let displayID = displays[index].displayID
+        guard let raw = lastKnownRawDisplays[displayID] else { return }
+        let resolution = resolveFilterState(
+            for: raw,
+            availableModes: displays[index].availableModes,
+            defaultMode: displays[index].defaultMode,
+            nativeMode: displays[index].nativeMode,
+            currentModeOption: displays[index].currentModeOption,
+            persistenceKey: persistenceKey
+        )
+        displays[index].filteredModes = resolution.filteredModes
+        displays[index].modeFilterState = resolution.filterState
     }
 
     public func assignCurrentModeToFavorite(_ displayID: UInt32, slot: Int) {

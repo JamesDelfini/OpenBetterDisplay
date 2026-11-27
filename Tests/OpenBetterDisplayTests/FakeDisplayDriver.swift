@@ -154,6 +154,32 @@ final class InMemoryDisplayModeFilterStore: DisplayModeFilterPersistence, @unche
     }
 }
 
+final class InMemoryFavoriteModesStore: FavoriteModesPersistence, @unchecked Sendable {
+    private let lock = NSLock()
+    private var slotsByKey: [String: [Int: FavoriteModeRecord]]
+
+    init(initialSlotsByKey: [String: [Int: FavoriteModeRecord]] = [:]) {
+        self.slotsByKey = initialSlotsByKey
+    }
+
+    func favoriteModes(forKey key: String) -> [Int: FavoriteModeRecord] {
+        lock.lock()
+        defer { lock.unlock() }
+        return slotsByKey[key] ?? [:]
+    }
+
+    func setFavoriteModes(_ slots: [Int: FavoriteModeRecord], forKey key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let filtered = slots.filter { (1...5).contains($0.key) }
+        if filtered.isEmpty {
+            slotsByKey.removeValue(forKey: key)
+        } else {
+            slotsByKey[key] = filtered
+        }
+    }
+}
+
 @MainActor
 final class ImmediateBrightnessWriteScheduler: BrightnessWriteScheduling {
     private final class NoOpToken: BrightnessWriteCancellable {

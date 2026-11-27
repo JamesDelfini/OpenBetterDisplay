@@ -297,6 +297,73 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
     }
 }
 
+/// Persisted snapshot of a Favorite Mode so it can be recalled across `modeID` shifts.
+public struct FavoriteModeRecord: Codable, Equatable, Sendable {
+    public var modeID: Int32
+    public var width: Int
+    public var height: Int
+    public var pixelWidth: Int
+    public var pixelHeight: Int
+    public var refreshRate: Double
+    public var bitsPerSample: Int
+
+    public init(
+        modeID: Int32,
+        width: Int,
+        height: Int,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        refreshRate: Double,
+        bitsPerSample: Int
+    ) {
+        self.modeID = modeID
+        self.width = width
+        self.height = height
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.refreshRate = refreshRate
+        self.bitsPerSample = bitsPerSample
+    }
+
+    public init(mode: DisplayModeOption) {
+        self.init(
+            modeID: mode.modeID,
+            width: mode.width,
+            height: mode.height,
+            pixelWidth: mode.pixelWidth,
+            pixelHeight: mode.pixelHeight,
+            refreshRate: mode.refreshRate,
+            bitsPerSample: mode.bitsPerSample
+        )
+    }
+}
+
+/// Resolved Favorite Mode slot (`1`–`5`) exposed on `DisplayState`.
+public struct FavoriteModeSlot: Equatable, Identifiable, Sendable {
+    public var slot: Int
+    public var record: FavoriteModeRecord
+    public var resolvedMode: DisplayModeOption?
+
+    public var id: Int { slot }
+
+    public var isAvailable: Bool {
+        resolvedMode != nil
+    }
+
+    public func matches(modeID: Int32) -> Bool {
+        if let resolvedMode {
+            return resolvedMode.modeID == modeID
+        }
+        return record.modeID == modeID
+    }
+
+    public init(slot: Int, record: FavoriteModeRecord, resolvedMode: DisplayModeOption?) {
+        self.slot = slot
+        self.record = record
+        self.resolvedMode = resolvedMode
+    }
+}
+
 public enum DisplayToggleLockReason: Equatable, Sendable {
     case mainDisplay
     case lastActiveDisplay
@@ -325,6 +392,7 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
     public var modeFilterState: DisplayModeFilterState
     public var defaultMode: DisplayModeOption?
     public var nativeMode: DisplayModeOption?
+    public var favoriteModes: [FavoriteModeSlot]
     public var currentModeID: Int32
     public var currentModeOption: DisplayModeOption?
 
@@ -349,6 +417,16 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         return currentModeOption?.resolutionLabel ?? ""
     }
 
+    public func favoriteMode(forSlot slot: Int) -> FavoriteModeSlot? {
+        favoriteModes.first(where: { $0.slot == slot })
+    }
+
+    public func isFavorited(modeID: Int32) -> Bool {
+        favoriteModes.contains { slotEntry in
+            slotEntry.matches(modeID: modeID)
+        }
+    }
+
     public init(
         displayID: UInt32,
         name: String,
@@ -363,6 +441,7 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         modeFilterState: DisplayModeFilterState = DisplayModeFilterState(),
         defaultMode: DisplayModeOption? = nil,
         nativeMode: DisplayModeOption? = nil,
+        favoriteModes: [FavoriteModeSlot] = [],
         currentModeID: Int32 = 0,
         currentModeOption: DisplayModeOption? = nil
     ) {
@@ -379,6 +458,7 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         self.modeFilterState = modeFilterState
         self.defaultMode = defaultMode
         self.nativeMode = nativeMode
+        self.favoriteModes = favoriteModes
         self.currentModeID = currentModeID
         self.currentModeOption = currentModeOption
     }

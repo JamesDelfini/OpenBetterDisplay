@@ -725,6 +725,7 @@ public final class DisplayCoordinator: ObservableObject {
         if !hudUpdates.isEmpty {
             lastBrightnessHUDUpdates = hudUpdates
             onBrightnessHUDUpdate?(hudUpdates)
+            hotkeyGateway?.showBrightnessHUD(hudUpdates)
         }
 
         return true

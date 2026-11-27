@@ -4,12 +4,16 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Every **Enabled Display** card shows the **Brightness** slider, a collapsible **Display Mode** pill displaying the active resolution summary when collapsed, and the bottom `⌄` chevron for **Set as Main Display**, with the old `Resolution` slider removed.
-- [ ] **Disconnected Displays** remain collapsed with no **Display Mode** or **Brightness** controls.
-- [ ] Expanding **Display Mode** or **Set as Main Display** collapses any other expanded section across the popover, and expansion resets cleanly when a display disconnects, unplugs, or the popover closes.
-- [ ] Expanding **Display Mode** displays a height-capped scrollable list with a **Default and native modes** group (`★` for **Default Mode** and `≡` for **Native Mode**) followed by safe `>= 720p` modes, hiding unsafe, stretched, and sub-720p modes.
-- [ ] Each **Display Mode** row renders an active checkmark when currently selected, logical `WidthxHeight`, and metadata badges for **HiDPI** (`✦`), aspect ratio, refresh rate, and color depth (`10bit` / `8bit`).
-- [ ] Clicking any **Display Mode** row switches the display to that mode immediately and updates the active checkmark and collapsed summary.
-- [ ] Mode parsing tests verify extraction of **Default Mode**, **Native Mode**, color depth (`10bit`/`8bit`), safe/stretched flags, and `>= 720p` filtering; coordinator behavioral tests across `DisplayDriver` verify immediate **Display Mode** switching, error preservation when macOS rejects a mode, and single-open accordion state; UI preview rendering and `make check` pass cleanly.
+- [x] Every **Enabled Display** card shows the **Brightness** slider, a collapsible **Display Mode** pill displaying the active resolution summary when collapsed, and the bottom `⌄` chevron for **Set as Main Display**, with the old `Resolution` slider removed.
+- [x] **Disconnected Displays** remain collapsed with no **Display Mode** or **Brightness** controls.
+- [x] Expanding **Display Mode** or **Set as Main Display** collapses any other expanded section across the popover, and expansion resets cleanly when a display disconnects, unplugs, or the popover closes.
+- [x] Expanding **Display Mode** displays a height-capped scrollable list with a **Default and native modes** group (`★` for **Default Mode** and `≡` for **Native Mode**) followed by safe `>= 720p` modes, hiding unsafe, stretched, and sub-720p modes.
+- [x] Each **Display Mode** row renders an active checkmark when currently selected, logical `WidthxHeight`, and metadata badges for **HiDPI** (`✦`), aspect ratio, refresh rate, and color depth (`10bit` / `8bit`).
+- [x] Clicking any **Display Mode** row switches the display to that mode immediately and updates the active checkmark and collapsed summary.
+- [x] Mode parsing tests verify extraction of **Default Mode**, **Native Mode**, color depth (`10bit`/`8bit`), safe/stretched flags, and `>= 720p` filtering; coordinator behavioral tests across `DisplayDriver` verify immediate **Display Mode** switching, error preservation when macOS rejects a mode, and single-open accordion state; UI preview rendering and `make check` pass cleanly.
+
+## Comments
+
+- Implemented on `ticket-01-card-layout-display-mode` (`cea5f1e`), merged into `feat/display-mode-refresh-rate-and-hotkeys` in `f524f01`, and refined after two-axis code review in `f708002` / `0d028e2` (combined unsafe flag parsing across `flags | ioFlags`, canonical domain naming, and shared UI section chrome).

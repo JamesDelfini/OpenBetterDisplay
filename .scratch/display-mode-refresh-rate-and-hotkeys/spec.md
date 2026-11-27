@@ -1,6 +1,6 @@
 # Display Mode Browser, Refresh Rate Picker & Brightness Hotkeys
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 

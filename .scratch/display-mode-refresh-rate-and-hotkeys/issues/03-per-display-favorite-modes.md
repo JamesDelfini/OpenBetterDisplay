@@ -4,11 +4,15 @@
 
 **Blocked by:** 01: Card Layout Transition & Core Display Mode Browser
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] **Display Mode** includes a **`Manage...`** toggle at the top showing slots `1`–`5` with distinct empty vs filled indicators for the display's **Favorite Modes** (with no `Pro` badge or gating).
-- [ ] Clicking an empty slot in **`Manage...`** assigns the display's currently active **Display Mode** to that slot; clicking an occupied slot (or clearing via action) updates or clears that slot cleanly.
-- [ ] Right-clicking any **Display Mode** row presents a context menu to assign that row's mode to Favorite slot `1`–`5` or remove it if already favorited.
-- [ ] Whenever one or more **Favorite Modes** are assigned for a display, a **`Favorites:`** section renders above **Default and native modes** with one-click switching; when none are assigned, the empty-state prompt appears as in the reference UI.
-- [ ] **Favorite Modes** persist per physical display across restarts and still resolve to the matching **Display Mode** via logical resolution, pixel dimensions, refresh rate, and color depth if macOS reassigns `modeID` after reconnect or reboot.
-- [ ] Behavioral tests across `DisplayDriver` and an in-memory persistence store verify per-display 5-slot assignment, clearing, replacement, one-click switching, and `modeID`-shift fallback resolution; UI preview rendering and `make check` pass cleanly.
+- [x] **Display Mode** includes a **`Manage...`** toggle at the top showing slots `1`–`5` with distinct empty vs filled indicators for the display's **Favorite Modes** (with no `Pro` badge or gating).
+- [x] Clicking an empty slot in **`Manage...`** assigns the display's currently active **Display Mode** to that slot; clicking an occupied slot (or clearing via action) updates or clears that slot cleanly.
+- [x] Right-clicking any **Display Mode** row presents a context menu to assign that row's mode to Favorite slot `1`–`5` or remove it if already favorited.
+- [x] Whenever one or more **Favorite Modes** are assigned for a display, a **`Favorites:`** section renders above **Default and native modes** with one-click switching; when none are assigned, the empty-state prompt appears as in the reference UI.
+- [x] **Favorite Modes** persist per physical display across restarts and still resolve to the matching **Display Mode** via logical resolution, pixel dimensions, refresh rate, and color depth if macOS reassigns `modeID` after reconnect or reboot.
+- [x] Behavioral tests across `DisplayDriver` and an in-memory persistence store verify per-display 5-slot assignment, clearing, replacement, one-click switching, and `modeID`-shift fallback resolution; UI preview rendering and `make check` pass cleanly.
+
+## Comments
+
+- Implemented on `ticket-03-per-display-favorite-modes` (`0202f77`), merged into `feat/display-mode-refresh-rate-and-hotkeys` in `3943bcc`, and refined after two-axis code review in `f708002` / `0d028e2` (added `isVariableRefreshRate` / `minRefreshRate` matching on `modeID` shifts, `fallbackModeOption`, shared `UserDefaultsJSONStore`, and serial-less physical persistence keys).

@@ -102,6 +102,7 @@ private func renderPreview() {
     var expandHotkeys = false
     var disconnectID: UInt32?
     var renderHUD = false
+    var maxHeight: CGFloat?
 
     var index = 0
     while index < args.count {
@@ -126,6 +127,9 @@ private func renderPreview() {
         } else if arg == "--hud" {
             renderHUD = true
             index += 1
+        } else if arg == "--max-height", index + 1 < args.count, let parsedHeight = Double(args[index + 1]) {
+            maxHeight = CGFloat(parsedHeight)
+            index += 2
         } else if arg == "--expanded-refresh", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             expandRefreshID = id
             index += 2
@@ -412,11 +416,33 @@ private func renderPreview() {
         )
     }
 
-    let hostingView = NSHostingView(rootView: previewContent)
-    hostingView.appearance = NSAppearance(named: .vibrantDark)
-    let fittingSize = hostingView.fittingSize
-    hostingView.frame = NSRect(origin: .zero, size: fittingSize)
-    hostingView.layoutSubtreeIfNeeded()
+    let rootView: NSView
+    let fittingSize: NSSize
+    if !renderHUD, let maxHeight {
+        let controller = VibrantPopoverViewController(
+            coordinator: coordinator,
+            maxContentHeight: maxHeight
+        )
+        let controllerSize =
+            controller.preferredContentSize == .zero
+            ? NSSize(width: PopoverLayoutMetrics.popoverWidth, height: maxHeight)
+            : controller.preferredContentSize
+        controller.view.frame = NSRect(origin: .zero, size: controllerSize)
+        controller.view.layoutSubtreeIfNeeded()
+        let finalSize = controller.preferredContentSize
+        controller.view.frame = NSRect(origin: .zero, size: finalSize)
+        controller.view.layoutSubtreeIfNeeded()
+        rootView = controller.view
+        fittingSize = finalSize
+    } else {
+        let hostingView = NSHostingView(rootView: previewContent)
+        hostingView.appearance = NSAppearance(named: .vibrantDark)
+        let measured = hostingView.fittingSize
+        hostingView.frame = NSRect(origin: .zero, size: measured)
+        hostingView.layoutSubtreeIfNeeded()
+        rootView = hostingView
+        fittingSize = measured
+    }
 
     let window = NSWindow(
         contentRect: NSRect(origin: .zero, size: fittingSize),
@@ -425,14 +451,14 @@ private func renderPreview() {
         defer: false
     )
     window.appearance = NSAppearance(named: .vibrantDark)
-    window.contentView = hostingView
-    hostingView.layoutSubtreeIfNeeded()
+    window.contentView = rootView
+    rootView.layoutSubtreeIfNeeded()
 
-    guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {
+    guard let bitmap = rootView.bitmapImageRepForCachingDisplay(in: rootView.bounds) else {
         fputs("error: unable to create bitmap representation\n", stderr)
         exit(1)
     }
-    hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+    rootView.cacheDisplay(in: rootView.bounds, to: bitmap)
 
     guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
         fputs("error: unable to encode PNG\n", stderr)

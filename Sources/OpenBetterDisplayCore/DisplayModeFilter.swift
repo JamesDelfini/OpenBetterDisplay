@@ -90,6 +90,43 @@ public enum DisplayModeFilter {
         return makeModeOption(mode: activeRaw)
     }
 
+    public static func resolveFavoriteModes(
+        from records: [Int: FavoriteModeRecord],
+        availableModes: [DisplayModeOption]
+    ) -> [FavoriteModeSlot] {
+        records.keys
+            .filter { UserDefaultsFavoriteModesStore.validSlotRange.contains($0) }
+            .sorted()
+            .compactMap { slot in
+                guard let record = records[slot] else { return nil }
+                let resolved = resolveFavoriteMode(record: record, availableModes: availableModes)
+                return FavoriteModeSlot(slot: slot, record: record, resolvedMode: resolved)
+            }
+    }
+
+    public static func resolveFavoriteMode(
+        record: FavoriteModeRecord,
+        availableModes: [DisplayModeOption]
+    ) -> DisplayModeOption? {
+        if let exact = availableModes.first(where: {
+            $0.modeID == record.modeID && matchesFavoriteRecord($0, record: record)
+        }) {
+            return exact
+        }
+        return availableModes.first(where: {
+            matchesFavoriteRecord($0, record: record)
+        })
+    }
+
+    public static func matchesFavoriteRecord(_ mode: DisplayModeOption, record: FavoriteModeRecord) -> Bool {
+        mode.width == record.width
+            && mode.height == record.height
+            && mode.pixelWidth == record.pixelWidth
+            && mode.pixelHeight == record.pixelHeight
+            && abs(mode.refreshRate - record.refreshRate) <= 0.05
+            && mode.bitsPerSample == record.bitsPerSample
+    }
+
     public static func makeModeOption(mode: RawDisplayMode) -> DisplayModeOption {
         let isHiDPI = isHiDPIMode(mode)
         let isOneToOneNative = mode.isNative && mode.width == mode.pixelWidth && mode.height == mode.pixelHeight

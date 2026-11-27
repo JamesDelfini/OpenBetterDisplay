@@ -1468,6 +1468,329 @@ final class DisplayCoordinatorTests: XCTestCase {
         coordinator.handlePopoverDidClose()
         XCTAssertNil(coordinator.expandedSection)
     }
+
+    func testAssigningCurrentDisplayModeToFavoriteSlotPopulatesDisplayStateAndValidatesSlotBounds() {
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 101,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 102,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10
+            )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 30,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x10AC,
+                modelID: 0xD0F1,
+                serialNumber: 0xAABBCCDD,
+                currentModeID: 102,
+                modes: modes
+            ),
+            RawDisplayInfo(
+                displayID: 40,
+                name: "DELL P2217H",
+                isBuiltIn: false,
+                isMain: false,
+                isActive: false,
+                currentModeID: 101,
+                modes: modes
+            )
+        ])
+
+        let favoriteStore = InMemoryFavoriteModesStore()
+        let coordinator = DisplayCoordinator(driver: driver, favoriteModesStore: favoriteStore)
+
+        XCTAssertTrue(coordinator.displays.first(where: { $0.displayID == 30 })?.favoriteModes.isEmpty ?? false)
+
+        coordinator.assignCurrentModeToFavorite(30, slot: 3)
+        coordinator.assignCurrentModeToFavorite(30, slot: 1)
+        coordinator.assignCurrentModeToFavorite(30, slot: 0)
+        coordinator.assignCurrentModeToFavorite(30, slot: 6)
+        coordinator.assignCurrentModeToFavorite(40, slot: 1)
+
+        let display30 = coordinator.displays.first(where: { $0.displayID == 30 })
+        XCTAssertEqual(display30?.favoriteModes.map(\.slot), [1, 3])
+        XCTAssertEqual(display30?.favoriteModes.first?.resolvedMode?.modeID, 102)
+        XCTAssertEqual(display30?.favoriteModes.first?.record.width, 2560)
+        XCTAssertEqual(display30?.favoriteModes.first?.record.height, 1440)
+        XCTAssertEqual(display30?.favoriteModes.first?.record.pixelWidth, 5120)
+        XCTAssertEqual(display30?.favoriteModes.first?.record.pixelHeight, 2880)
+        XCTAssertEqual(display30?.favoriteModes.first?.record.refreshRate, 120.0)
+        XCTAssertEqual(display30?.favoriteModes.first?.record.bitsPerSample, 10)
+        XCTAssertTrue(coordinator.displays.first(where: { $0.displayID == 40 })?.favoriteModes.isEmpty ?? false)
+    }
+
+    func testAssigningSpecificModeReplacesSlotAndClearingOrRemovingUpdatesFavorites() {
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, bitsPerSample: 10),
+            RawDisplayMode(
+                modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
+            RawDisplayMode(modeID: 103, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 102, modes: modes)
+        ])
+
+        let favoriteStore = InMemoryFavoriteModesStore()
+        let coordinator = DisplayCoordinator(driver: driver, favoriteModesStore: favoriteStore)
+
+        // Assign non-current modes without switching active mode
+        coordinator.assignFavoriteMode(30, modeID: 101, slot: 2)
+        coordinator.assignFavoriteMode(30, modeID: 103, slot: 5)
+        XCTAssertEqual(coordinator.displays.first?.currentModeID, 102)
+        XCTAssertTrue(driver.setModeHistory.isEmpty)
+        XCTAssertEqual(coordinator.displays.first?.favoriteModes.map(\.slot), [2, 5])
+        XCTAssertEqual(coordinator.displays.first?.favoriteMode(forSlot: 2)?.resolvedMode?.modeID, 101)
+        XCTAssertTrue(coordinator.displays.first?.isFavorited(modeID: 101) ?? false)
+
+        // Replace slot 2 with mode 103 and ignore unknown modeID
+        coordinator.assignFavoriteMode(30, modeID: 103, slot: 2)
+        coordinator.assignFavoriteMode(30, modeID: 999, slot: 4)
+        XCTAssertEqual(coordinator.displays.first?.favoriteMode(forSlot: 2)?.resolvedMode?.modeID, 103)
+        XCTAssertFalse(coordinator.displays.first?.isFavorited(modeID: 101) ?? true)
+        XCTAssertTrue(coordinator.displays.first?.isFavorited(modeID: 103) ?? false)
+        XCTAssertNil(coordinator.displays.first?.favoriteMode(forSlot: 4))
+
+        // Removing a mode from Favorites clears every slot pointing to it
+        coordinator.removeModeFromFavorites(30, modeID: 103)
+        XCTAssertTrue(coordinator.displays.first?.favoriteModes.isEmpty ?? false)
+
+        // Clearing one slot leaves other slots intact
+        coordinator.assignFavoriteMode(30, modeID: 101, slot: 1)
+        coordinator.assignFavoriteMode(30, modeID: 102, slot: 4)
+        coordinator.clearFavoriteMode(30, slot: 1)
+        XCTAssertEqual(coordinator.displays.first?.favoriteModes.map(\.slot), [4])
+        XCTAssertEqual(coordinator.displays.first?.favoriteMode(forSlot: 4)?.resolvedMode?.modeID, 102)
+    }
+
+    func testSelectingFavoriteSlotSwitchesDisplayModeImmediatelyAndPreservesStateOnFailure() {
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, bitsPerSample: 10),
+            RawDisplayMode(
+                modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
+            RawDisplayMode(modeID: 103, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 101, modes: modes),
+            RawDisplayInfo(
+                displayID: 40, name: "DELL P2217H", isBuiltIn: false, isMain: false, isActive: false, currentModeID: 101, modes: modes)
+        ])
+        let favoriteStore = InMemoryFavoriteModesStore()
+        let coordinator = DisplayCoordinator(driver: driver, favoriteModesStore: favoriteStore)
+
+        coordinator.assignFavoriteMode(30, modeID: 102, slot: 1)
+        coordinator.assignFavoriteMode(30, modeID: 103, slot: 2)
+
+        // Switching to empty slot or disabled display is ignored
+        coordinator.selectFavoriteMode(30, slot: 5)
+        coordinator.selectFavoriteMode(40, slot: 1)
+        XCTAssertTrue(driver.setModeHistory.isEmpty)
+
+        // Switching to slot 1 activates mode 102
+        coordinator.selectFavoriteMode(30, slot: 1)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+        XCTAssertEqual(driver.setModeHistory.first?.displayID, 30)
+        XCTAssertEqual(driver.setModeHistory.first?.modeID, 102)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.currentModeID, 102)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.resolutionLabel, "2560x1440")
+
+        // Clicking an already-active favorite slot does not call driver again
+        coordinator.selectFavoriteMode(30, slot: 1)
+        XCTAssertEqual(driver.setModeHistory.count, 1)
+
+        // Driver error preserves currentModeID and resolutionLabel
+        driver.setDisplayModeError = DisplayDriverError.configurationFailed(-1)
+        coordinator.selectFavoriteMode(30, slot: 2)
+        XCTAssertEqual(driver.setModeHistory.count, 2)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.currentModeID, 102)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.resolutionLabel, "2560x1440")
+    }
+
+    func testFavoriteModesPersistPerPhysicalDisplayAcrossHotplugAndResolveViaAttributeFallbackWhenModeIDShifts() {
+        let builtInModes: [RawDisplayMode] = [
+            RawDisplayMode(modeID: 12, width: 1512, height: 982, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0, bitsPerSample: 10)
+        ]
+        let externalModesInitial: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, bitsPerSample: 10),
+            RawDisplayMode(
+                modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
+            RawDisplayMode(modeID: 103, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false, currentModeID: 12, modes: builtInModes),
+            RawDisplayInfo(
+                displayID: 30,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x10AC,
+                modelID: 0xD0F1,
+                serialNumber: 0x11223344,
+                currentModeID: 101,
+                modes: externalModesInitial
+            )
+        ])
+
+        let favoriteStore = InMemoryFavoriteModesStore()
+        let coordinator = DisplayCoordinator(driver: driver, favoriteModesStore: favoriteStore)
+        coordinator.assignCurrentModeToFavorite(1, slot: 1)
+        coordinator.assignFavoriteMode(30, modeID: 102, slot: 1)
+        coordinator.assignFavoriteMode(30, modeID: 103, slot: 2)
+
+        // Simulate hotplug + macOS reassigning modeIDs (102 now points to 1280x720, while 2560x1440 moved to 502)
+        // and slot 2's 60Hz 8bit mode temporarily unavailable while 3840x2160 120Hz 10bit is present.
+        let externalModesReconnected: [RawDisplayMode] = [
+            RawDisplayMode(modeID: 102, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60.0, bitsPerSample: 8),
+            RawDisplayMode(
+                modeID: 501, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, bitsPerSample: 10),
+            RawDisplayMode(
+                modeID: 502, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
+            RawDisplayMode(
+                modeID: 503, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, bitsPerSample: 10)
+        ]
+
+        let relaunchedDriver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false, currentModeID: 12, modes: builtInModes),
+            RawDisplayInfo(
+                displayID: 35,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x10AC,
+                modelID: 0xD0F1,
+                serialNumber: 0x11223344,
+                currentModeID: 501,
+                modes: externalModesReconnected
+            )
+        ])
+
+        let relaunchedCoordinator = DisplayCoordinator(driver: relaunchedDriver, favoriteModesStore: favoriteStore)
+        let builtIn = relaunchedCoordinator.displays.first(where: { $0.displayID == 1 })
+        let reconnectedExternal = relaunchedCoordinator.displays.first(where: { $0.displayID == 35 })
+
+        XCTAssertEqual(builtIn?.favoriteModes.map(\.slot), [1])
+        XCTAssertEqual(builtIn?.favoriteMode(forSlot: 1)?.resolvedMode?.modeID, 12)
+
+        XCTAssertEqual(reconnectedExternal?.favoriteModes.map(\.slot), [1, 2])
+        XCTAssertEqual(reconnectedExternal?.favoriteMode(forSlot: 1)?.resolvedMode?.modeID, 502)
+        XCTAssertTrue(reconnectedExternal?.favoriteMode(forSlot: 1)?.isAvailable ?? false)
+        XCTAssertNil(reconnectedExternal?.favoriteMode(forSlot: 2)?.resolvedMode)
+        XCTAssertFalse(reconnectedExternal?.favoriteMode(forSlot: 2)?.isAvailable ?? true)
+
+        relaunchedCoordinator.selectFavoriteMode(35, slot: 1)
+        XCTAssertEqual(relaunchedDriver.setModeHistory.last?.displayID, 35)
+        XCTAssertEqual(relaunchedDriver.setModeHistory.last?.modeID, 502)
+        XCTAssertEqual(relaunchedCoordinator.displays.first(where: { $0.displayID == 35 })?.currentModeID, 502)
+
+        // When 3840x2160 @ 60Hz 8bit returns on modeID 603, slot 2 resolves again without user reassignment
+        relaunchedDriver.onlineDisplays[1].modes.append(
+            RawDisplayMode(modeID: 603, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
+        )
+        relaunchedCoordinator.handleDisplayReconfiguration()
+        let updatedExternal = relaunchedCoordinator.displays.first(where: { $0.displayID == 35 })
+        XCTAssertEqual(updatedExternal?.favoriteMode(forSlot: 2)?.resolvedMode?.modeID, 603)
+    }
+
+    func testUserDefaultsFavoriteModesStorePersistsAndClearsSlotsPerDisplayKey() {
+        let suiteName = "OpenBetterDisplayTests.Favorites.\(UUID().uuidString)"
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+
+        let store = UserDefaultsFavoriteModesStore(userDefaults: userDefaults)
+        XCTAssertTrue(store.favoriteModes(forKey: "builtin").isEmpty)
+
+        let slot1 = FavoriteModeRecord(
+            modeID: 102,
+            width: 2560,
+            height: 1440,
+            pixelWidth: 5120,
+            pixelHeight: 2880,
+            refreshRate: 120.0,
+            bitsPerSample: 10
+        )
+        let slot5 = FavoriteModeRecord(
+            modeID: 103,
+            width: 3840,
+            height: 2160,
+            pixelWidth: 3840,
+            pixelHeight: 2160,
+            refreshRate: 59.94,
+            bitsPerSample: 8
+        )
+        store.setFavoriteModes([0: slot1, 1: slot1, 5: slot5, 6: slot5], forKey: "hardware:10AC:D0F1:11223344")
+
+        let reloadedStore = UserDefaultsFavoriteModesStore(userDefaults: userDefaults)
+        XCTAssertTrue(reloadedStore.favoriteModes(forKey: "builtin").isEmpty)
+        let loaded = reloadedStore.favoriteModes(forKey: "hardware:10AC:D0F1:11223344")
+        XCTAssertEqual(loaded, [1: slot1, 5: slot5])
+
+        reloadedStore.setFavoriteModes([:], forKey: "hardware:10AC:D0F1:11223344")
+        XCTAssertTrue(store.favoriteModes(forKey: "hardware:10AC:D0F1:11223344").isEmpty)
+    }
+
+    func testManageFavoritesTogglesInsideDisplayModeAndResetsWhenSectionOrPopoverCloses() {
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false),
+            RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true),
+            RawDisplayInfo(displayID: 40, name: "DELL P2217H", isBuiltIn: false, isMain: false, isActive: false)
+        ])
+
+        let coordinator = DisplayCoordinator(driver: driver)
+
+        coordinator.toggleManageFavorites(for: 40)
+        XCTAssertNil(coordinator.managingFavoritesDisplayID)
+
+        coordinator.toggleManageFavorites(for: 30)
+        XCTAssertEqual(coordinator.expandedSection, .displayMode(30))
+        XCTAssertEqual(coordinator.managingFavoritesDisplayID, 30)
+
+        coordinator.toggleManageFavorites(for: 30)
+        XCTAssertNil(coordinator.managingFavoritesDisplayID)
+        XCTAssertEqual(coordinator.expandedSection, .displayMode(30))
+
+        // Opening another section collapses Manage...
+        coordinator.toggleManageFavorites(for: 30)
+        XCTAssertEqual(coordinator.managingFavoritesDisplayID, 30)
+        coordinator.toggleExpandedSection(.mainDisplay(30))
+        XCTAssertNil(coordinator.managingFavoritesDisplayID)
+
+        // Closing popover resets Manage...
+        coordinator.toggleManageFavorites(for: 1)
+        XCTAssertEqual(coordinator.managingFavoritesDisplayID, 1)
+        coordinator.handlePopoverDidClose()
+        XCTAssertNil(coordinator.managingFavoritesDisplayID)
+
+        // Disconnecting display resets Manage...
+        coordinator.toggleManageFavorites(for: 1)
+        XCTAssertEqual(coordinator.managingFavoritesDisplayID, 1)
+        coordinator.setDisplayEnabled(1, enabled: false)
+        XCTAssertNil(coordinator.managingFavoritesDisplayID)
+    }
 }
 
 @MainActor

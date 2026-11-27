@@ -184,6 +184,25 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             UnsafeMutablePointer<Int32>
         ) -> CGError
 
+    private typealias SLSIsDisplayModeVRRFn =
+        @convention(c) (
+            CGDirectDisplayID,
+            Int32
+        ) -> Bool
+
+    private typealias SLSIsDisplayModeProMotionFn =
+        @convention(c) (
+            CGDirectDisplayID,
+            Int32
+        ) -> Bool
+
+    private typealias SLSGetDisplayModeMinRefreshRateFn =
+        @convention(c) (
+            CGDirectDisplayID,
+            Int32,
+            UnsafeMutablePointer<Float>
+        ) -> CGError
+
     private typealias CoreDisplayCreateInfoDictionaryFn =
         @convention(c) (
             CGDirectDisplayID
@@ -212,6 +231,9 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
     private let cgsGetNumberOfDisplayModes: CGSGetNumberOfDisplayModesFn?
     private let cgsGetDisplayModeDescriptionOfLength: CGSGetDisplayModeDescriptionOfLengthFn?
     private let cgsGetCurrentDisplayMode: CGSGetCurrentDisplayModeFn?
+    private let slsIsDisplayModeVRR: SLSIsDisplayModeVRRFn?
+    private let slsIsDisplayModeProMotion: SLSIsDisplayModeProMotionFn?
+    private let slsGetDisplayModeMinRefreshRate: SLSGetDisplayModeMinRefreshRateFn?
     private let coreDisplayCreateInfoDictionary: CoreDisplayCreateInfoDictionaryFn?
     private let displayServicesCanChangeBrightness: DisplayServicesCanChangeBrightnessFn?
     private let displayServicesGetBrightness: DisplayServicesGetBrightnessFn?
@@ -230,6 +252,9 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         self.cgsGetNumberOfDisplayModes = skyLight.symbol("CGSGetNumberOfDisplayModes")
         self.cgsGetDisplayModeDescriptionOfLength = skyLight.symbol("CGSGetDisplayModeDescriptionOfLength")
         self.cgsGetCurrentDisplayMode = skyLight.symbol("CGSGetCurrentDisplayMode")
+        self.slsIsDisplayModeVRR = skyLight.symbol("SLSIsDisplayModeVRR")
+        self.slsIsDisplayModeProMotion = skyLight.symbol("SLSIsDisplayModeProMotion")
+        self.slsGetDisplayModeMinRefreshRate = skyLight.symbol("SLSGetDisplayModeMinRefreshRate")
 
         let coreDisplay = DynamicLibrary(path: "/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay")
         let createInfoDict: CoreDisplayCreateInfoDictionaryFn? = coreDisplay.symbol("CoreDisplay_DisplayCreateInfoDictionary")
@@ -279,7 +304,7 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 serialNumber: serialNumber
             )
             let currentModeID = fetchCurrentModeID(for: displayID)
-            let modes = fetchDisplayModes(for: displayID)
+            let modes = fetchDisplayModes(for: displayID, currentModeID: currentModeID)
             let bounds = CGDisplayBounds(displayID)
 
             return RawDisplayInfo(
@@ -644,6 +669,11 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 if existing.refreshRate <= 0, skyLightMode.refreshRate > 0 {
                     existing.refreshRate = skyLightMode.refreshRate
                 }
+                existing.isVRR = existing.isVRR || skyLightMode.isVRR
+                existing.isProMotion = existing.isProMotion || skyLightMode.isProMotion
+                if let minRefreshRate = skyLightMode.minRefreshRate {
+                    existing.minRefreshRate = minRefreshRate
+                }
                 mergedByID[skyLightMode.modeID] = existing
             } else {
                 orderedIDs.append(skyLightMode.modeID)
@@ -654,7 +684,42 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         return orderedIDs.compactMap { mergedByID[$0] }
     }
 
-    private func fetchDisplayModes(for displayID: CGDirectDisplayID) -> [RawDisplayMode] {
+    public static func resolveVRRMetadata(
+        isVRR: Bool,
+        isProMotion: Bool,
+        reportedMinRefreshRate: Double?,
+        maxRefreshRate: Double,
+        isCurrentMode: Bool,
+        activeScreenMaxRefreshInterval: TimeInterval?
+    ) -> (isVRR: Bool, isProMotion: Bool, minRefreshRate: Double?) {
+        let normalized = DisplayModeFilter.normalizeVRR(
+            isVRR: isVRR,
+            isProMotion: isProMotion,
+            minRefreshRate: reportedMinRefreshRate,
+            maxRefreshRate: maxRefreshRate
+        )
+        let hasValidReportedMin =
+            reportedMinRefreshRate.map { $0 > 0.5 && $0 < maxRefreshRate - 0.5 } ?? false
+
+        if normalized.isProMotion,
+            !hasValidReportedMin,
+            isCurrentMode,
+            let interval = activeScreenMaxRefreshInterval,
+            interval > 0
+        {
+            let derivedMin = (1.0 / interval).rounded()
+            if derivedMin > 0.5, derivedMin < maxRefreshRate - 0.5 {
+                return (true, true, derivedMin)
+            }
+        }
+
+        return normalized
+    }
+
+    private func fetchDisplayModes(
+        for displayID: CGDirectDisplayID,
+        currentModeID: Int32
+    ) -> [RawDisplayMode] {
         let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         var cgModes = (CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode]) ?? []
         if let currentMode = CGDisplayCopyDisplayMode(displayID),
@@ -681,11 +746,20 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             )
         }
 
-        let skyLightModes = fetchSkyLightDisplayModes(for: displayID)
+        let activeInterval = Self.activeScreenMaxRefreshInterval(for: displayID)
+        let skyLightModes = fetchSkyLightDisplayModes(
+            for: displayID,
+            currentModeID: currentModeID,
+            activeScreenMaxRefreshInterval: activeInterval
+        )
         return Self.mergeDisplayModes(cgModes: mappedCGModes, skyLightModes: skyLightModes)
     }
 
-    private func fetchSkyLightDisplayModes(for displayID: CGDirectDisplayID) -> [RawDisplayMode] {
+    private func fetchSkyLightDisplayModes(
+        for displayID: CGDirectDisplayID,
+        currentModeID: Int32,
+        activeScreenMaxRefreshInterval: TimeInterval?
+    ) -> [RawDisplayMode] {
         guard let cgsGetNumberOfDisplayModes,
             let cgsGetDisplayModeDescriptionOfLength
         else {
@@ -714,12 +788,45 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                     SkyLightDisplayModeDescription.byteLength
                 )
             }
-            if err == .success, let parsed = SkyLightDisplayModeDescription.parse(bytes: buffer) {
+            if err == .success, var parsed = SkyLightDisplayModeDescription.parse(bytes: buffer) {
+                let rawIsVRR = slsIsDisplayModeVRR?(displayID, index) ?? false
+                let rawIsProMotion = slsIsDisplayModeProMotion?(displayID, index) ?? false
+                var reportedMinHz: Double?
+                if let slsGetDisplayModeMinRefreshRate, rawIsVRR || rawIsProMotion {
+                    var minHz: Float = 0
+                    if slsGetDisplayModeMinRefreshRate(displayID, index, &minHz) == .success {
+                        reportedMinHz = Double(minHz)
+                    }
+                }
+                let vrr = Self.resolveVRRMetadata(
+                    isVRR: rawIsVRR,
+                    isProMotion: rawIsProMotion,
+                    reportedMinRefreshRate: reportedMinHz,
+                    maxRefreshRate: parsed.refreshRate,
+                    isCurrentMode: parsed.modeID == currentModeID,
+                    activeScreenMaxRefreshInterval: activeScreenMaxRefreshInterval
+                )
+                parsed.isVRR = vrr.isVRR
+                parsed.isProMotion = vrr.isProMotion
+                parsed.minRefreshRate = vrr.minRefreshRate
                 modes.append(parsed)
             }
         }
 
         return modes
+    }
+
+    private static func activeScreenMaxRefreshInterval(for displayID: CGDirectDisplayID) -> TimeInterval? {
+        let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
+        for screen in NSScreen.screens {
+            if let number = screen.deviceDescription[screenNumberKey] as? NSNumber,
+                number.uint32Value == displayID
+            {
+                let interval = screen.maximumRefreshInterval
+                return interval > 0 ? interval : nil
+            }
+        }
+        return nil
     }
 
     private static func buildDisplayMatchTarget(

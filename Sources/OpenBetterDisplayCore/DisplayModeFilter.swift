@@ -131,6 +131,12 @@ public enum DisplayModeFilter {
         let isHiDPI = isHiDPIMode(mode)
         let isOneToOneNative = mode.isNative && mode.width == mode.pixelWidth && mode.height == mode.pixelHeight
         let bits = max(1, mode.bitsPerSample)
+        let vrr = normalizeVRR(
+            isVRR: mode.isVRR,
+            isProMotion: mode.isProMotion,
+            minRefreshRate: mode.minRefreshRate,
+            maxRefreshRate: mode.refreshRate
+        )
         return DisplayModeOption(
             modeID: mode.modeID,
             width: mode.width,
@@ -142,11 +148,109 @@ public enum DisplayModeFilter {
             isHiDPI: isHiDPI,
             isDefault: mode.isDefault,
             isNative: isOneToOneNative,
+            isVRR: vrr.isVRR,
+            isProMotion: vrr.isProMotion,
+            minRefreshRate: vrr.minRefreshRate,
             aspectRatioLabel: formatAspectRatio(width: mode.width, height: mode.height),
-            refreshRateLabel: formatRefreshRate(mode.refreshRate),
+            refreshRateLabel: formatShortRefreshRate(
+                refreshRate: mode.refreshRate,
+                isVRR: vrr.isVRR,
+                minRefreshRate: vrr.minRefreshRate
+            ),
             colorDepthLabel: "\(bits)bit",
             resolutionLabel: "\(mode.width)x\(mode.height)"
         )
+    }
+
+    public static func refreshRateOptions(
+        for activeMode: DisplayModeOption?,
+        in availableModes: [DisplayModeOption]
+    ) -> [RefreshRateOption] {
+        guard let activeMode else { return [] }
+
+        let matchingModes = availableModes.filter { mode in
+            mode.width == activeMode.width
+                && mode.height == activeMode.height
+                && mode.isHiDPI == activeMode.isHiDPI
+                && mode.refreshRate > 0.5
+        }
+        guard !matchingModes.isEmpty else { return [] }
+
+        var grouped: [RefreshRateBucketKey: DisplayModeOption] = [:]
+        for mode in matchingModes {
+            let vrr = normalizeVRR(
+                isVRR: mode.isVRR,
+                isProMotion: mode.isProMotion,
+                minRefreshRate: mode.minRefreshRate,
+                maxRefreshRate: mode.refreshRate
+            )
+            let key = RefreshRateBucketKey(
+                isVRR: vrr.isVRR,
+                minHzHundredths: vrr.minRefreshRate.map { Int(($0 * 100.0).rounded()) },
+                maxHzHundredths: Int((mode.refreshRate * 100.0).rounded())
+            )
+            if let existing = grouped[key] {
+                if isPreferredRefreshRateCandidate(mode, over: existing, activeMode: activeMode) {
+                    grouped[key] = mode
+                }
+            } else {
+                grouped[key] = mode
+            }
+        }
+
+        var options = grouped.values.map(makeRefreshRateOption(from:))
+        options.sort { lhs, rhs in
+            if lhs.isNTSC != rhs.isNTSC {
+                return !lhs.isNTSC && rhs.isNTSC
+            }
+            if !lhs.isNTSC, lhs.isVRR != rhs.isVRR {
+                return lhs.isVRR && !rhs.isVRR
+            }
+            if abs(lhs.refreshRate - rhs.refreshRate) > 0.005 {
+                return lhs.refreshRate > rhs.refreshRate
+            }
+            let lhsMin = lhs.minRefreshRate ?? 0
+            let rhsMin = rhs.minRefreshRate ?? 0
+            if abs(lhsMin - rhsMin) > 0.005 {
+                return lhsMin > rhsMin
+            }
+            return lhs.modeID < rhs.modeID
+        }
+        return options
+    }
+
+    private struct RefreshRateBucketKey: Hashable {
+        let isVRR: Bool
+        let minHzHundredths: Int?
+        let maxHzHundredths: Int
+    }
+
+    private static func isPreferredRefreshRateCandidate(
+        _ candidate: DisplayModeOption,
+        over current: DisplayModeOption,
+        activeMode: DisplayModeOption
+    ) -> Bool {
+        if candidate.modeID == activeMode.modeID {
+            return true
+        }
+        if current.modeID == activeMode.modeID {
+            return false
+        }
+        let candidateMatchesBits = candidate.bitsPerSample == activeMode.bitsPerSample
+        let currentMatchesBits = current.bitsPerSample == activeMode.bitsPerSample
+        if candidateMatchesBits != currentMatchesBits {
+            return candidateMatchesBits
+        }
+        if candidate.bitsPerSample != current.bitsPerSample {
+            return candidate.bitsPerSample > current.bitsPerSample
+        }
+        if candidate.isDefault != current.isDefault {
+            return candidate.isDefault
+        }
+        if candidate.isNative != current.isNative {
+            return candidate.isNative
+        }
+        return candidate.modeID < current.modeID
     }
 
     private static func safeDesktopModes(from modes: [RawDisplayMode]) -> [RawDisplayMode] {
@@ -213,13 +317,84 @@ public enum DisplayModeFilter {
         return "\(tenths / 10).\(tenths % 10):10"
     }
 
-    private static func formatRefreshRate(_ refreshRate: Double) -> String? {
+    static func normalizeVRR(
+        isVRR: Bool,
+        isProMotion: Bool,
+        minRefreshRate: Double?,
+        maxRefreshRate: Double
+    ) -> (isVRR: Bool, isProMotion: Bool, minRefreshRate: Double?) {
+        let effectiveIsVRR = isVRR || isProMotion
+        guard effectiveIsVRR else {
+            return (false, false, nil)
+        }
+        if let minRefreshRate,
+            minRefreshRate > 0.5,
+            minRefreshRate < maxRefreshRate - 0.5
+        {
+            return (true, isProMotion, minRefreshRate)
+        }
+        if isProMotion, maxRefreshRate > 24.5 {
+            return (true, true, 24.0)
+        }
+        return (true, isProMotion, nil)
+    }
+
+    private static func makeRefreshRateOption(from mode: DisplayModeOption) -> RefreshRateOption {
+        let vrr = normalizeVRR(
+            isVRR: mode.isVRR,
+            isProMotion: mode.isProMotion,
+            minRefreshRate: mode.minRefreshRate,
+            maxRefreshRate: mode.refreshRate
+        )
+        let isNTSC = isNTSCRefreshRate(mode.refreshRate, isVRR: vrr.isVRR)
+        let shortLabel =
+            formatShortRefreshRate(
+                refreshRate: mode.refreshRate,
+                isVRR: vrr.isVRR,
+                minRefreshRate: vrr.minRefreshRate
+            ) ?? ""
+        let label = vrr.isVRR ? "\(shortLabel) (Variable)" : shortLabel
+
+        return RefreshRateOption(
+            modeID: mode.modeID,
+            refreshRate: mode.refreshRate,
+            minRefreshRate: vrr.minRefreshRate,
+            isVRR: vrr.isVRR,
+            isProMotion: vrr.isProMotion,
+            isNTSC: isNTSC,
+            label: label,
+            shortLabel: shortLabel
+        )
+    }
+
+    private static func isNTSCRefreshRate(_ refreshRate: Double, isVRR: Bool) -> Bool {
+        guard !isVRR, refreshRate > 0.5 else { return false }
+        return abs(refreshRate - refreshRate.rounded()) >= 0.01
+    }
+
+    private static func formatShortRefreshRate(
+        refreshRate: Double,
+        isVRR: Bool,
+        minRefreshRate: Double?
+    ) -> String? {
+        guard let maxNumber = formatRateNumber(refreshRate) else { return nil }
+        if isVRR,
+            let minRefreshRate,
+            minRefreshRate < refreshRate - 0.5,
+            let minNumber = formatRateNumber(minRefreshRate)
+        {
+            return "\(minNumber)–\(maxNumber)Hz"
+        }
+        return "\(maxNumber)Hz"
+    }
+
+    private static func formatRateNumber(_ refreshRate: Double) -> String? {
         guard refreshRate > 0.5 else { return nil }
         let rounded = refreshRate.rounded()
-        if abs(refreshRate - rounded) < 0.05 {
-            return "\(Int(rounded))Hz"
+        if abs(refreshRate - rounded) < 0.01 {
+            return "\(Int(rounded))"
         }
-        return String(format: "%.2fHz", refreshRate)
+        return String(format: "%.2f", refreshRate)
     }
 
     private static func gcd(_ a: Int, _ b: Int) -> Int {

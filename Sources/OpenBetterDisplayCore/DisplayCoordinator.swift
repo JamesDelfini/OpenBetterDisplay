@@ -392,6 +392,41 @@ public final class DisplayCoordinator: ObservableObject {
             return
         }
 
+        applyDisplayModeSwitch(at: index, modeID: modeID, knownOption: knownTargetOption)
+    }
+
+    public func selectRefreshRate(_ displayID: UInt32, modeID: Int32) {
+        guard let index = displays.firstIndex(where: { $0.displayID == displayID }),
+            displays[index].isEnabled
+        else {
+            return
+        }
+
+        let display = displays[index]
+        let activeOption =
+            display.availableModes.first(where: { $0.modeID == display.currentModeID })
+            ?? display.currentModeOption
+        let matchesOption = display.refreshRateOptions.contains(where: { $0.modeID == modeID })
+        let matchesActiveResolutionAndTier =
+            activeOption.map { active in
+                display.availableModes.contains { candidate in
+                    candidate.modeID == modeID
+                        && candidate.width == active.width
+                        && candidate.height == active.height
+                        && candidate.isHiDPI == active.isHiDPI
+                }
+            } ?? false
+        guard matchesOption || matchesActiveResolutionAndTier else {
+            return
+        }
+
+        let knownOption = resolveKnownModeOption(for: display, modeID: modeID)
+        applyDisplayModeSwitch(at: index, modeID: modeID, knownOption: knownOption)
+    }
+
+    private func applyDisplayModeSwitch(at index: Int, modeID: Int32, knownOption: DisplayModeOption?) {
+        let display = displays[index]
+        let displayID = display.displayID
         guard modeID != display.currentModeID else {
             return
         }
@@ -402,7 +437,7 @@ public final class DisplayCoordinator: ObservableObject {
             displays[index].currentModeOption = resolveSelectedModeOption(
                 for: display,
                 modeID: modeID,
-                knownOption: knownTargetOption,
+                knownOption: knownOption,
                 raw: lastKnownRawDisplays[displayID]
             )
             lastKnownRawDisplays[displayID]?.currentModeID = modeID

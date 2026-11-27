@@ -14,6 +14,13 @@ Verified on Apple Silicon (M4 Pro, `arm64`, macOS 26.7.3). All private symbols l
   - Read request (4 bytes): `[0x82, 0x01, 0x10, 0xAC]`, wait `40–50ms`, read 11-byte reply verifying `0x50 ^ r[0...9] == r[10]`, `r[2] == 0x02`, `r[3] == 0x00`, `r[4] == 0x10`, `max = r[6]<<8 | r[7]`, `cur = r[8]<<8 | r[9]`.
 - **Sandbox note:** Seatbelt-sandboxed CLI processes receive `nil` from `IOAVServiceCreateWithService`; unsandboxed ad-hoc signed `OpenBetterDisplay.app` operates normally.
 
+## IOKit (`IOHIDEventSystemClientCreate` — Function-Key Mode Checker)
+
+- **Defining library:** `/System/Library/Frameworks/IOKit.framework/IOKit` (loaded dynamically via `DynamicLibrary`).
+- **Private symbol:** `IOHIDEventSystemClientCreate` (`@convention(c) (CFAllocator?) -> Unmanaged<IOHIDEventSystemClient>?`), returning a `+1` retained client (`takeRetainedValue()`). Do **not** substitute `IOHIDEventSystemClientCreateSimpleClient`, which returns `nil` when reading `"HIDFKeyMode"` via `IOHIDEventSystemClientCopyProperty`.
+- **Fallback & live change notifications:** Fall back to `CFPreferencesCopyAppValue("com.apple.keyboard.fnState" as CFString, kCFPreferencesAnyApplication)` (`Bool`) if `HIDFKeyMode` is unavailable, and observe `DistributedNotificationCenter.default()` for `"com.apple.keyboard.fnstatedidchange"`.
+- **TCC / EventTap invariant:** Never call `CGEvent.tapCreate` (`kCGSessionEventTap`, `NX_SYSDEFINED`) unless `AXIsProcessTrusted()` is already `true`, as `CGEventTapCreate` triggers `SLSRequestListenEventAccess` on untrusted binaries.
+
 ## DisplayServices (Built-in Backlight)
 
 - **Library:** `/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices`
@@ -22,8 +29,17 @@ Verified on Apple Silicon (M4 Pro, `arm64`, macOS 26.7.3). All private symbols l
 ## SkyLight (Display Power & Modes)
 
 - **Library:** `/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight`
-- **Symbols:** `CGSGetDisplayList`, `CGSConfigureDisplayEnabled`, `CGSGetNumberOfDisplayModes`, `CGSGetDisplayModeDescriptionOfLength`, `CGSGetCurrentDisplayMode`, `CGSConfigureDisplayMode`.
-- **Mode description layout (`SkyLightDisplayModeDescription`):** 212-byte little-endian struct (`0x00` modeNumber, `0x04` flags, `0x08` width, `0x0C` height, `0x10` depth, `0x24` intFreq, `0xBC` fixed-point 16.16 refresh rate, `0xC0` ioFlags, `0xC4` ioDisplayModeID, `0xC8` pixelWidth, `0xCC` pixelHeight, `0xD0` Float scale; `0x0200_0000` native flag).
+- **Symbols:** `CGSGetDisplayList`, `CGSConfigureDisplayEnabled`, `CGSGetNumberOfDisplayModes`, `CGSGetDisplayModeDescriptionOfLength`, `CGSGetCurrentDisplayMode`, `CGSConfigureDisplayMode`, `SLSIsDisplayModeVRR`, `SLSIsDisplayModeProMotion`, `SLSGetDisplayModeMinRefreshRate`.
+- **Mode description layout (`SkyLightDisplayModeDescription`):** 212-byte little-endian struct (`0x00` modeNumber, `0x04` flags, `0x08` width, `0x0C` height, `0x10` depth [reports `8` even on 10-bit modes], `0x1C` `UInt32` `bitsPerSample`, `0x24` intFreq, `0x30` `char[128]` null-terminated ASCII pixel encoding fallback e.g. `"--RRRRRRRRRRGGGGGGGGGGBBBBBBBBBB"`, `0xBC` fixed-point 16.16 refresh rate, `0xC0` ioFlags, `0xC4` ioDisplayModeID, `0xC8` pixelWidth, `0xCC` pixelHeight, `0xD0` Float scale).
+- **VRR & ProMotion queries:**
+  - `bool SLSIsDisplayModeVRR(CGDirectDisplayID displayID, int32_t modeNumber)` and `bool SLSIsDisplayModeProMotion(CGDirectDisplayID displayID, int32_t modeNumber)` take the **0-based mode index** (`0..<modeCount`, matching `CGSGetDisplayModeDescriptionOfLength`).
+  - `CGError SLSGetDisplayModeMinRefreshRate(CGDirectDisplayID displayID, int32_t modeNumber, float *outMinRefreshRate)` writes a **32-bit `Float` (`UnsafeMutablePointer<Float>`), NOT `Double`**.
+  - **ProMotion minHz caveat:** On Apple Silicon ProMotion panels, `SLSGetDisplayModeMinRefreshRate` returns `minHz == refreshRate` (`120.0`) instead of `24.0`. When `isProMotion == true` and `minHz >= refreshRate - 0.5`, derive the lower bound from `NSScreen.maximumRefreshInterval` (`1.0 / maximumRefreshInterval`, rounded) when that mode is active, or fall back to `24.0` Hz.
+- **Flags & pixel encoding caveats:**
+  - `kDisplayModeDefaultFlag` (`0x0000_0004`) marks the factory **Default Mode** (`★`); `kDisplayModeStretchedFlag` (`0x0000_0800`) and `0x4000_0000` mark stretched/unsafe modes excluded from the **Display Mode** browser.
+  - `kDisplayModeValidForMirroringFlag` (`0x0020_0000`) marks virtual/mirroring modes in SkyLight (such as unexposed `1920x1080 HiDPI @ 75Hz` on a `1920x1080` panel) that `CGDisplayCopyAllDisplayModes` withholds because they are not standalone desktop timings; `MacOSDisplayDriver` uses SkyLight only to enrich `CGDisplayCopyAllDisplayModes` (plus the active `CGDisplayCopyDisplayMode` fallback) rather than exposing unvetted SkyLight modes.
+  - `kDisplayModeNativeFlag` (`0x0200_0000`) is set on **both** 1x physical-grid modes and their 2x HiDPI pixel-doubled counterparts; identifying the 1:1 **Native Mode** (`≡`) requires `isNative && width == pixelWidth && height == pixelHeight`.
+  - `CGDisplayModeCopyPixelEncoding` (`CoreGraphics`) is a hardcoded stub on macOS 26 returning 8-bit `"--------RRRRRRRRGGGGGGGGBBBBBBBB"` for all modes; read `bitsPerSample` from SkyLight `+0x1C` (with `+0x30` fallback) and preserve it when merging SkyLight metadata onto `CGDisplayMode` entries.
 
 ## CoreDisplay & EDID Name Fallback
 

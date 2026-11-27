@@ -129,6 +129,57 @@ final class InMemoryBrightnessStore: BrightnessPersistence, @unchecked Sendable 
     }
 }
 
+final class InMemoryDisplayModeFilterStore: DisplayModeFilterPersistence, @unchecked Sendable {
+    private let lock = NSLock()
+    private var filtersByKey: [String: DisplayModeFilterCriteria]
+
+    init(initialFilters: [String: DisplayModeFilterCriteria] = [:]) {
+        self.filtersByKey = initialFilters
+    }
+
+    func modeFilter(forKey key: String) -> DisplayModeFilterCriteria? {
+        lock.lock()
+        defer { lock.unlock() }
+        return filtersByKey[key]
+    }
+
+    func setModeFilter(_ filter: DisplayModeFilterCriteria?, forKey key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let filter {
+            filtersByKey[key] = filter
+        } else {
+            filtersByKey.removeValue(forKey: key)
+        }
+    }
+}
+
+final class InMemoryFavoriteModesStore: FavoriteModesPersistence, @unchecked Sendable {
+    private let lock = NSLock()
+    private var slotsByKey: [String: [Int: FavoriteModeRecord]]
+
+    init(initialSlotsByKey: [String: [Int: FavoriteModeRecord]] = [:]) {
+        self.slotsByKey = initialSlotsByKey
+    }
+
+    func favoriteModes(forKey key: String) -> [Int: FavoriteModeRecord] {
+        lock.lock()
+        defer { lock.unlock() }
+        return slotsByKey[key] ?? [:]
+    }
+
+    func setFavoriteModes(_ slots: [Int: FavoriteModeRecord], forKey key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let filtered = slots.filter { (1...5).contains($0.key) }
+        if filtered.isEmpty {
+            slotsByKey.removeValue(forKey: key)
+        } else {
+            slotsByKey[key] = filtered
+        }
+    }
+}
+
 @MainActor
 final class ImmediateBrightnessWriteScheduler: BrightnessWriteScheduling {
     private final class NoOpToken: BrightnessWriteCancellable {

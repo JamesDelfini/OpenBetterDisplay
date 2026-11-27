@@ -22,6 +22,13 @@ if grep -rnE "\b(final )?(class|struct|enum) (Fake|Mock|Stub|InMemory)[A-Z]" "${
     exit 1
 fi
 
+echo "==> Checking line lengths (< 140 chars)..."
+if find "${ROOT_DIR}/Sources" "${ROOT_DIR}/Tests" "${ROOT_DIR}/Tools" -name "*.swift" -print0 | xargs -0 awk 'length($0) >= 140 { printf "%s:%d:1: error: [LineLength] line length %d >= 140\n", FILENAME, FNR, length($0); found=1 } END { exit found ? 1 : 0 }'; then
+    :
+else
+    exit 1
+fi
+
 echo "==> Running swift format lint (strict)..."
 swift format lint \
     --strict \

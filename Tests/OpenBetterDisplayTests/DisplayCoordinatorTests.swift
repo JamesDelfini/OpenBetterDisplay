@@ -717,7 +717,14 @@ final class DisplayCoordinatorTests: XCTestCase {
 
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(displayID: 1, name: "Built-in Display", isBuiltIn: true, isMain: false, currentModeID: 54, modes: builtInModes),
-            RawDisplayInfo(displayID: 20, name: "DELL P2217H", isBuiltIn: false, isMain: true, currentModeID: 32, modes: standard1080pModes)
+            RawDisplayInfo(
+                displayID: 20,
+                name: "DELL P2217H",
+                isBuiltIn: false,
+                isMain: true,
+                currentModeID: 32,
+                modes: standard1080pModes
+            )
         ])
 
         let coordinator = DisplayCoordinator(driver: driver)
@@ -1155,7 +1162,7 @@ final class DisplayCoordinatorTests: XCTestCase {
             )
         ]
 
-        // Active mode is 8-bit 60Hz (modeID 204) -> keeps 204 selected and prefers 8-bit 120Hz (202) while keeping Variable Refresh Rate 200 distinct
+        // Active 8-bit 60Hz (204) keeps 204 selected and prefers 8-bit 120Hz (202) while keeping Variable Refresh Rate 200 distinct
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 204, modes: modes)
         ])
@@ -2764,7 +2771,8 @@ final class DisplayCoordinatorTests: XCTestCase {
                 modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, bitsPerSample: 10),
             RawDisplayMode(
                 modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
-            RawDisplayMode(modeID: 103, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
+            RawDisplayMode(
+                modeID: 103, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
         ]
 
         let driver = FakeDisplayDriver(onlineDisplays: [
@@ -2809,7 +2817,8 @@ final class DisplayCoordinatorTests: XCTestCase {
                 modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, bitsPerSample: 10),
             RawDisplayMode(
                 modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
-            RawDisplayMode(modeID: 103, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
+            RawDisplayMode(
+                modeID: 103, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
         ]
 
         let driver = FakeDisplayDriver(onlineDisplays: [
@@ -2850,14 +2859,16 @@ final class DisplayCoordinatorTests: XCTestCase {
 
     func testFavoriteModesPersistPerPhysicalDisplayAcrossHotplugAndResolveViaAttributeFallbackWhenModeIDShifts() {
         let builtInModes: [RawDisplayMode] = [
-            RawDisplayMode(modeID: 12, width: 1512, height: 982, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0, bitsPerSample: 10)
+            RawDisplayMode(
+                modeID: 12, width: 1512, height: 982, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0, bitsPerSample: 10)
         ]
         let externalModesInitial: [RawDisplayMode] = [
             RawDisplayMode(
                 modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 120.0, bitsPerSample: 10),
             RawDisplayMode(
                 modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
-            RawDisplayMode(modeID: 103, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
+            RawDisplayMode(
+                modeID: 103, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
         ]
 
         let driver = FakeDisplayDriver(onlineDisplays: [
@@ -2928,7 +2939,8 @@ final class DisplayCoordinatorTests: XCTestCase {
 
         // When 3840x2160 @ 60Hz 8bit returns on modeID 603, slot 2 resolves again without user reassignment
         relaunchedDriver.onlineDisplays[1].modes.append(
-            RawDisplayMode(modeID: 603, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
+            RawDisplayMode(
+                modeID: 603, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, bitsPerSample: 8)
         )
         relaunchedCoordinator.handleDisplayReconfiguration()
         let updatedExternal = relaunchedCoordinator.displays.first(where: { $0.displayID == 35 })

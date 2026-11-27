@@ -474,7 +474,7 @@ final class SkyLightDisplayModeTests: XCTestCase {
         XCTAssertEqual(externalVariableRate.isProMotion, false)
         XCTAssertEqual(externalVariableRate.minRefreshRate ?? -1, 48.0, accuracy: 0.001)
 
-        // Built-in Variable Refresh Rate active mode where SkyLight returns minHz == maxHz (120.0) derives 24Hz from NSScreen.maximumRefreshInterval
+        // Active adaptive mode where SkyLight returns minHz == maxHz (120.0) derives 24Hz via NSScreen.maximumRefreshInterval
         let activeBuiltInAdaptive = MacOSDisplayDriver.resolveVariableRefreshRateMetadata(
             isVariableRefreshRate: true,
             usesAdaptiveFloorFallback: true,

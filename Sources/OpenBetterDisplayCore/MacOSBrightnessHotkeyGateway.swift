@@ -160,6 +160,7 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     public var onCheckerStatusDidChange: (@MainActor () -> Void)?
 
     private let ioHIDEventSystemClientCreate: IOHIDEventSystemClientCreateFn?
+    private let hudPresenter: BrightnessHUDPresenting?
     private var currentPreferences = HotkeyPreferences()
     private nonisolated(unsafe) var mediaEventTap: CFMachPort?
     private nonisolated(unsafe) var mediaRunLoopSource: CFRunLoopSource?
@@ -172,14 +173,15 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     private nonisolated(unsafe) var fnStateObserver: NSObjectProtocol?
     private nonisolated(unsafe) var appDidBecomeActiveObserver: NSObjectProtocol?
 
-    public init() {
+    public init(hudPresenter: BrightnessHUDPresenting? = nil) {
         let ioKit = DynamicLibrary(path: "/System/Library/Frameworks/IOKit.framework/IOKit")
         self.ioHIDEventSystemClientCreate = ioKit.symbol("IOHIDEventSystemClientCreate")
+        self.hudPresenter = hudPresenter
         startStatusObservers()
     }
 
     deinit {
-        stop()
+        stopSystemCaptureAndObservers()
     }
 
     public func applyPreferences(_ preferences: HotkeyPreferences) {
@@ -225,7 +227,17 @@ public final class MacOSBrightnessHotkeyGateway: BrightnessHotkeyGateway {
         NSWorkspace.shared.open(url)
     }
 
-    nonisolated public func stop() {
+    public func showBrightnessHUD(_ updates: [BrightnessHUDUpdate]) {
+        guard !updates.isEmpty else { return }
+        hudPresenter?.showBrightnessHUD(updates)
+    }
+
+    public func stop() {
+        stopSystemCaptureAndObservers()
+        hudPresenter?.dismissAllBrightnessHUDs()
+    }
+
+    nonisolated private func stopSystemCaptureAndObservers() {
         stopRepeatTimers()
         unregisterLiteralHotKeys()
         stopMediaEventTap()

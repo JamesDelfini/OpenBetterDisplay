@@ -88,7 +88,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         let driver = MacOSDisplayDriver()
-        let hotkeyGateway = MacOSBrightnessHotkeyGateway()
+        let hudController = BrightnessHUDPanelController()
+        let hotkeyGateway = MacOSBrightnessHotkeyGateway(hudPresenter: hudController)
         let coordinator = DisplayCoordinator(driver: driver, hotkeyGateway: hotkeyGateway)
         coordinator.onRequestPopoverClose = { [weak self] in
             self?.closePopoverImmediately()

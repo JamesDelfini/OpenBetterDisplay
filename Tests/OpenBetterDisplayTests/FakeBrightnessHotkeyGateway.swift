@@ -12,6 +12,7 @@ final class FakeBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     var pointerLocation: CGPoint?
     var accessibilityPermissionRequestCount = 0
     var openKeyboardSettingsCount = 0
+    var shownHUDBatches: [[BrightnessHUDUpdate]] = []
     var stopCount = 0
 
     init(
@@ -45,6 +46,10 @@ final class FakeBrightnessHotkeyGateway: BrightnessHotkeyGateway {
         openKeyboardSettingsCount += 1
     }
 
+    func showBrightnessHUD(_ updates: [BrightnessHUDUpdate]) {
+        shownHUDBatches.append(updates)
+    }
+
     func stop() {
         stopCount += 1
     }
@@ -57,6 +62,20 @@ final class FakeBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     func simulateCheckerStatusChange(_ newStatus: KeyboardCheckerStatus) {
         checkerStatus = newStatus
         onCheckerStatusDidChange?()
+    }
+}
+
+@MainActor
+final class FakeBrightnessHUDPresenter: BrightnessHUDPresenting {
+    var shownBatches: [[BrightnessHUDUpdate]] = []
+    var dismissAllCount = 0
+
+    func showBrightnessHUD(_ updates: [BrightnessHUDUpdate]) {
+        shownBatches.append(updates)
+    }
+
+    func dismissAllBrightnessHUDs() {
+        dismissAllCount += 1
     }
 }
 

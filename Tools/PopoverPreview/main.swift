@@ -74,6 +74,7 @@ private final class PreviewBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     func currentPointerLocation() -> CGPoint? { nil }
     func requestAccessibilityPermission() {}
     func openKeyboardSettings() {}
+    func showBrightnessHUD(_ updates: [BrightnessHUDUpdate]) {}
     func stop() {}
 }
 
@@ -100,6 +101,7 @@ private func renderPreview() {
     var expandRefreshID: UInt32?
     var expandHotkeys = false
     var disconnectID: UInt32?
+    var renderHUD = false
 
     var index = 0
     while index < args.count {
@@ -120,6 +122,9 @@ private func renderPreview() {
             }
         } else if arg == "--expanded-hotkeys" {
             expandHotkeys = true
+            index += 1
+        } else if arg == "--hud" {
+            renderHUD = true
             index += 1
         } else if arg == "--expanded-refresh", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             expandRefreshID = id
@@ -354,16 +359,61 @@ private func renderPreview() {
         coordinator.toggleExpandedSection(.mainDisplay(expandMainID))
     }
 
-    let previewSurface = DisplayPopoverView(coordinator: coordinator)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(red: 0.13, green: 0.14, blue: 0.17))
+    let previewContent: AnyView
+    if renderHUD {
+        let sampleUpdates = [
+            BrightnessHUDUpdate(
+                displayID: 30,
+                displayName: "DELL U2725QE",
+                symbolName: "display",
+                brightness: 0.625,
+                brightnessPercentage: 63,
+                backend: .hardwareDDC
+            ),
+            BrightnessHUDUpdate(
+                displayID: 20,
+                displayName: "DELL P2217H",
+                symbolName: "display",
+                brightness: 0.0,
+                brightnessPercentage: 0,
+                backend: .softwareGamma
+            ),
+            BrightnessHUDUpdate(
+                displayID: 40,
+                displayName: "Pro Display XDR Studio Monitor Long Name",
+                symbolName: "display",
+                brightness: 1.0,
+                brightnessPercentage: 100,
+                backend: .hardwareDDC
+            )
+        ]
+        previewContent = AnyView(
+            VStack(spacing: 12) {
+                ForEach(sampleUpdates, id: \.displayID) { update in
+                    BrightnessHUDView(update: update)
+                        .background(
+                            RoundedRectangle(cornerRadius: BrightnessHUDView.cornerRadius, style: .continuous)
+                                .fill(Color(red: 0.13, green: 0.14, blue: 0.17))
+                        )
+                }
+            }
+            .padding(20)
+            .background(Color(red: 0.08, green: 0.09, blue: 0.11))
         )
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .padding(16)
-        .background(Color(red: 0.08, green: 0.09, blue: 0.11))
+    } else {
+        previewContent = AnyView(
+            DisplayPopoverView(coordinator: coordinator)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(red: 0.13, green: 0.14, blue: 0.17))
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(16)
+                .background(Color(red: 0.08, green: 0.09, blue: 0.11))
+        )
+    }
 
-    let hostingView = NSHostingView(rootView: previewSurface)
+    let hostingView = NSHostingView(rootView: previewContent)
     hostingView.appearance = NSAppearance(named: .vibrantDark)
     let fittingSize = hostingView.fittingSize
     hostingView.frame = NSRect(origin: .zero, size: fittingSize)

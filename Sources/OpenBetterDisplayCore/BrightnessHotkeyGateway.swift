@@ -159,6 +159,13 @@ public final class UserDefaultsHotkeyPreferencesStore: HotkeyPreferencesPersiste
     }
 }
 
+/// Presents and tears down floating Brightness HUD overlays for adjusted external Target Displays.
+@MainActor
+public protocol BrightnessHUDPresenting: AnyObject {
+    func showBrightnessHUD(_ updates: [BrightnessHUDUpdate])
+    func dismissAllBrightnessHUDs()
+}
+
 @MainActor
 public protocol BrightnessHotkeyGateway: AnyObject {
     var onBrightnessKeyEvent: (@MainActor (BrightnessKeyEvent) -> Bool)? { get set }
@@ -169,5 +176,6 @@ public protocol BrightnessHotkeyGateway: AnyObject {
     func currentPointerLocation() -> CGPoint?
     func requestAccessibilityPermission()
     func openKeyboardSettings()
+    func showBrightnessHUD(_ updates: [BrightnessHUDUpdate])
     func stop()
 }

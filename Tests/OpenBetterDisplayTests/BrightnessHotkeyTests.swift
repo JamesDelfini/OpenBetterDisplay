@@ -629,4 +629,208 @@ final class BrightnessHotkeyTests: XCTestCase {
         XCTAssertEqual(BrightnessKeyEventParser.resolveFunctionKeyMode(hidFKeyMode: nil, cfPreferenceFnState: false), .mediaKeys)
         XCTAssertEqual(BrightnessKeyEventParser.resolveFunctionKeyMode(hidFKeyMode: nil, cfPreferenceFnState: nil), .unknown)
     }
+
+    func testGatewayReceivesExternalTargetHUDPayloadsAndSuppressesBuiltInPassthroughHUD() {
+        let driver = FakeDisplayDriver(
+            onlineDisplays: [
+                RawDisplayInfo(
+                    displayID: 1,
+                    name: "Built-in Display",
+                    isBuiltIn: true,
+                    isMain: false,
+                    bounds: CGRect(x: -1512, y: 0, width: 1512, height: 982)
+                ),
+                RawDisplayInfo(
+                    displayID: 20,
+                    name: "DELL P2217H",
+                    isBuiltIn: false,
+                    isMain: false,
+                    bounds: CGRect(x: 2560, y: 0, width: 1920, height: 1080)
+                ),
+                RawDisplayInfo(
+                    displayID: 30,
+                    name: "DELL U2725QE",
+                    isBuiltIn: false,
+                    isMain: true,
+                    bounds: CGRect(x: 0, y: 0, width: 2560, height: 1440)
+                ),
+                RawDisplayInfo(
+                    displayID: 40,
+                    name: "LG UltraFine",
+                    isBuiltIn: false,
+                    isMain: false,
+                    bounds: CGRect(x: 4480, y: 0, width: 1920, height: 1080)
+                )
+            ],
+            brightnessReadings: [
+                1: BrightnessReading(level: 0.50, backend: .nativeAppleBacklight),
+                20: BrightnessReading(level: 0.80, backend: .hardwareDDC),
+                30: BrightnessReading(level: 0.40, backend: .softwareGamma),
+                40: BrightnessReading(level: 0.90, backend: .hardwareDDC)
+            ],
+            unsupportedDDCDisplayIDs: [30]
+        )
+        let gateway = FakeBrightnessHotkeyGateway()
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            ddcThrottleInterval: 0,
+            writeScheduler: ImmediateBrightnessWriteScheduler(),
+            hotkeyGateway: gateway,
+            hotkeyPreferencesStore: InMemoryHotkeyPreferencesStore()
+        )
+
+        // Disconnect display 40 so All Enabled Displays excludes Disconnected Displays.
+        coordinator.setDisplayEnabled(40, enabled: false)
+
+        // 1. Follow Mouse Cursor over external DELL P2217H emits HUD only for display 20
+        XCTAssertTrue(
+            gateway.simulateKeyEvent(
+                BrightnessKeyEvent(
+                    direction: .decrease,
+                    source: .mediaBrightness,
+                    pointerLocation: CGPoint(x: 3000, y: 500)
+                )
+            )
+        )
+        XCTAssertEqual(
+            gateway.shownHUDBatches.last,
+            [
+                BrightnessHUDUpdate(
+                    displayID: 20,
+                    displayName: "DELL P2217H",
+                    symbolName: "display",
+                    brightness: 0.7375,
+                    brightnessPercentage: 74,
+                    backend: .hardwareDDC
+                )
+            ]
+        )
+
+        // 2. Follow Mouse Cursor over Built-in Display passes through to macOS with NO custom HUD emitted
+        let batchCountBeforeBuiltIn = gateway.shownHUDBatches.count
+        XCTAssertFalse(
+            gateway.simulateKeyEvent(
+                BrightnessKeyEvent(
+                    direction: .increase,
+                    source: .mediaBrightness,
+                    pointerLocation: CGPoint(x: -500, y: 400)
+                )
+            )
+        )
+        XCTAssertEqual(gateway.shownHUDBatches.count, batchCountBeforeBuiltIn)
+
+        // 3. Main Display mode emits HUD for external Main Display (DELL U2725QE)
+        coordinator.setHotkeyTargetMode(.mainDisplay)
+        XCTAssertTrue(
+            gateway.simulateKeyEvent(
+                BrightnessKeyEvent(
+                    direction: .increase,
+                    source: .mediaBrightness,
+                    pointerLocation: CGPoint(x: 3000, y: 500)
+                )
+            )
+        )
+        XCTAssertEqual(
+            gateway.shownHUDBatches.last,
+            [
+                BrightnessHUDUpdate(
+                    displayID: 30,
+                    displayName: "DELL U2725QE",
+                    symbolName: "display",
+                    brightness: 0.4625,
+                    brightnessPercentage: 46,
+                    backend: .softwareGamma
+                )
+            ]
+        )
+
+        // 4. All Enabled Displays emits HUD payloads for every enabled external display only (excludes Built-in and Disconnected)
+        coordinator.setHotkeyTargetMode(.allEnabledDisplays)
+        XCTAssertTrue(
+            gateway.simulateKeyEvent(
+                BrightnessKeyEvent(direction: .increase, source: .mediaBrightness, isFine: true)
+            )
+        )
+        XCTAssertEqual(
+            gateway.shownHUDBatches.last,
+            [
+                BrightnessHUDUpdate(
+                    displayID: 20,
+                    displayName: "DELL P2217H",
+                    symbolName: "display",
+                    brightness: 0.753125,
+                    brightnessPercentage: 75,
+                    backend: .hardwareDDC
+                ),
+                BrightnessHUDUpdate(
+                    displayID: 30,
+                    displayName: "DELL U2725QE",
+                    symbolName: "display",
+                    brightness: 0.478125,
+                    brightnessPercentage: 48,
+                    backend: .softwareGamma
+                )
+            ]
+        )
+
+        // 5. Built-in Display as Main Display in .mainDisplay mode passes through with NO HUD emitted
+        let batchCountBeforeBuiltInMain = gateway.shownHUDBatches.count
+        coordinator.setMainDisplay(1)
+        coordinator.setHotkeyTargetMode(.mainDisplay)
+        XCTAssertFalse(
+            gateway.simulateKeyEvent(
+                BrightnessKeyEvent(direction: .decrease, source: .mediaBrightness)
+            )
+        )
+        XCTAssertEqual(gateway.shownHUDBatches.count, batchCountBeforeBuiltInMain)
+
+        // 6. Follow Mouse Cursor outside bounds or over Disconnected Display falls back to Built-in Main Display -> passthrough, NO HUD
+        coordinator.setHotkeyTargetMode(.followMouseCursor)
+        XCTAssertFalse(
+            gateway.simulateKeyEvent(
+                BrightnessKeyEvent(
+                    direction: .increase,
+                    source: .mediaBrightness,
+                    pointerLocation: CGPoint(x: 4700, y: 500)
+                )
+            )
+        )
+        XCTAssertEqual(gateway.shownHUDBatches.count, batchCountBeforeBuiltInMain)
+
+        // 7. All Enabled Displays when only Built-in Display remains enabled passes through with NO HUD emitted
+        coordinator.setHotkeyTargetMode(.allEnabledDisplays)
+        coordinator.setDisplayEnabled(20, enabled: false)
+        coordinator.setDisplayEnabled(30, enabled: false)
+        XCTAssertFalse(
+            gateway.simulateKeyEvent(
+                BrightnessKeyEvent(direction: .increase, source: .mediaBrightness)
+            )
+        )
+        XCTAssertEqual(gateway.shownHUDBatches.count, batchCountBeforeBuiltInMain)
+    }
+
+    func testMacOSBrightnessHotkeyGatewayForwardsHUDUpdatesAndDismissesOnStop() {
+        let presenter = FakeBrightnessHUDPresenter()
+        let gateway = MacOSBrightnessHotkeyGateway(hudPresenter: presenter)
+
+        gateway.showBrightnessHUD([])
+        XCTAssertTrue(presenter.shownBatches.isEmpty)
+
+        let updates = [
+            BrightnessHUDUpdate(
+                displayID: 20,
+                displayName: "DELL P2217H",
+                symbolName: "display",
+                brightness: 0.75,
+                brightnessPercentage: 75,
+                backend: .hardwareDDC
+            )
+        ]
+        gateway.showBrightnessHUD(updates)
+        XCTAssertEqual(presenter.shownBatches, [updates])
+
+        gateway.stop()
+        XCTAssertEqual(presenter.dismissAllCount, 1)
+    }
 }

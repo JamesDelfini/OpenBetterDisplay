@@ -12,7 +12,11 @@ public final class DisplayCoordinator: ObservableObject {
         }
     }
     @Published public private(set) var managingFavoritesDisplayID: UInt32?
+    @Published public private(set) var hotkeyPreferences: HotkeyPreferences
+    @Published public private(set) var keyboardCheckerStatus: KeyboardCheckerStatus = KeyboardCheckerStatus()
+    @Published public private(set) var lastBrightnessHUDUpdates: [BrightnessHUDUpdate] = []
     public var onRequestPopoverClose: (@MainActor () -> Void)?
+    public var onBrightnessHUDUpdate: (@MainActor ([BrightnessHUDUpdate]) -> Void)?
 
     private struct DDCThrottleState {
         var pendingLevel: Double?
@@ -25,11 +29,16 @@ public final class DisplayCoordinator: ObservableObject {
         }
     }
 
+    private static let normalBrightnessStep = 1.0 / 16.0
+    private static let fineBrightnessStep = 1.0 / 64.0
+
     private let driver: DisplayDriver
     private let brightnessStore: BrightnessPersistence
     private let favoriteModesStore: FavoriteModesPersistence
     private let ddcThrottleInterval: TimeInterval
     private let writeScheduler: BrightnessWriteScheduling
+    private let hotkeyGateway: BrightnessHotkeyGateway?
+    private let hotkeyPreferencesStore: HotkeyPreferencesPersistence
     private var lastKnownRawDisplays: [UInt32: RawDisplayInfo] = [:]
     private var disconnectedDisplays: [UInt32: RawDisplayInfo] = [:]
     private var knownEnabledDisplayIDs: Set<UInt32> = []
@@ -45,14 +54,20 @@ public final class DisplayCoordinator: ObservableObject {
         brightnessStore: BrightnessPersistence = UserDefaultsBrightnessStore(),
         favoriteModesStore: FavoriteModesPersistence = UserDefaultsFavoriteModesStore(),
         ddcThrottleInterval: TimeInterval = 0.06,
-        writeScheduler: BrightnessWriteScheduling? = nil
+        writeScheduler: BrightnessWriteScheduling? = nil,
+        hotkeyGateway: BrightnessHotkeyGateway? = nil,
+        hotkeyPreferencesStore: HotkeyPreferencesPersistence = UserDefaultsHotkeyPreferencesStore()
     ) {
         self.driver = driver
         self.brightnessStore = brightnessStore
         self.favoriteModesStore = favoriteModesStore
         self.ddcThrottleInterval = max(0, ddcThrottleInterval)
         self.writeScheduler = writeScheduler ?? MainQueueBrightnessWriteScheduler()
+        self.hotkeyGateway = hotkeyGateway
+        self.hotkeyPreferencesStore = hotkeyPreferencesStore
+        self.hotkeyPreferences = hotkeyPreferencesStore.loadPreferences() ?? HotkeyPreferences()
         refreshDisplays()
+        configureHotkeyGateway()
     }
 
     public func canToggleOff(_ displayID: UInt32) -> Bool {
@@ -99,6 +114,9 @@ public final class DisplayCoordinator: ObservableObject {
             }
         }
         expandedSection = section
+        if section == .hotkeys {
+            refreshKeyboardCheckerStatus()
+        }
     }
 
     public func handlePopoverDidClose() {
@@ -206,6 +224,7 @@ public final class DisplayCoordinator: ObservableObject {
 
     /// Lifecycle hook: app is terminating — cancel pending DDC writes, re-enable all disconnected displays, and restore gamma.
     public func handleAppWillTerminate() {
+        hotkeyGateway?.stop()
         cancelAllPendingDDCWrites()
         reconnectAllDisplays()
         cancelAllPendingDDCWrites()
@@ -300,7 +319,8 @@ public final class DisplayCoordinator: ObservableObject {
                 nativeMode: nativeMode,
                 favoriteModes: favoriteModes,
                 currentModeID: raw.currentModeID,
-                currentModeOption: currentModeOption
+                currentModeOption: currentModeOption,
+                bounds: raw.bounds
             )
         }
 
@@ -634,6 +654,129 @@ public final class DisplayCoordinator: ObservableObject {
     private func cancelAllPendingDDCWrites() {
         for displayID in ddcThrottleStates.keys {
             cancelPendingDDCWrite(for: displayID)
+        }
+    }
+
+    public func setHotkeyTargetMode(_ targetMode: HotkeyTargetMode) {
+        updateHotkeyPreferences { $0.targetMode = targetMode }
+    }
+
+    public func setMediaKeysEnabled(_ enabled: Bool) {
+        updateHotkeyPreferences { $0.isMediaKeysEnabled = enabled }
+    }
+
+    public func setLiteralF1F2Enabled(_ enabled: Bool) {
+        updateHotkeyPreferences { $0.isLiteralF1F2Enabled = enabled }
+    }
+
+    public func refreshKeyboardCheckerStatus() {
+        guard let hotkeyGateway else { return }
+        keyboardCheckerStatus = hotkeyGateway.readCheckerStatus()
+    }
+
+    public func requestAccessibilityPermission() {
+        hotkeyGateway?.requestAccessibilityPermission()
+        refreshKeyboardCheckerStatus()
+    }
+
+    public func openKeyboardSettings() {
+        hotkeyGateway?.openKeyboardSettings()
+    }
+
+    @discardableResult
+    public func handleBrightnessKeyEvent(_ event: BrightnessKeyEvent) -> Bool {
+        switch event.source {
+        case .mediaBrightness:
+            guard hotkeyPreferences.isMediaKeysEnabled else { return false }
+        case .literalFunctionKey:
+            guard hotkeyPreferences.isLiteralF1F2Enabled else { return false }
+        }
+
+        let targets = resolveTargetDisplays(pointerLocation: event.pointerLocation)
+        guard !targets.isEmpty else { return false }
+
+        if event.source == .mediaBrightness, targets.allSatisfy(\.isBuiltIn) {
+            return false
+        }
+
+        let magnitude = event.isFine ? Self.fineBrightnessStep : Self.normalBrightnessStep
+        let delta = event.direction == .increase ? magnitude : -magnitude
+
+        var hudUpdates: [BrightnessHUDUpdate] = []
+        for target in targets {
+            let nextLevel = max(0.0, min(1.0, target.brightness + delta))
+            setBrightness(target.displayID, level: nextLevel)
+            if !target.isBuiltIn,
+                let updatedDisplay = displays.first(where: { $0.displayID == target.displayID })
+            {
+                hudUpdates.append(
+                    BrightnessHUDUpdate(
+                        displayID: updatedDisplay.displayID,
+                        displayName: updatedDisplay.name,
+                        symbolName: updatedDisplay.symbolName,
+                        brightness: updatedDisplay.brightness,
+                        brightnessPercentage: updatedDisplay.brightnessPercentage,
+                        backend: updatedDisplay.brightnessBackend
+                    )
+                )
+            }
+        }
+
+        if !hudUpdates.isEmpty {
+            lastBrightnessHUDUpdates = hudUpdates
+            onBrightnessHUDUpdate?(hudUpdates)
+        }
+
+        return true
+    }
+
+    private func updateHotkeyPreferences(_ update: (inout HotkeyPreferences) -> Void) {
+        var next = hotkeyPreferences
+        update(&next)
+        guard next != hotkeyPreferences else { return }
+        hotkeyPreferences = next
+        hotkeyPreferencesStore.savePreferences(next)
+        hotkeyGateway?.applyPreferences(next)
+        if let hotkeyGateway {
+            keyboardCheckerStatus = hotkeyGateway.readCheckerStatus()
+        }
+    }
+
+    private func configureHotkeyGateway() {
+        guard let hotkeyGateway else { return }
+        hotkeyGateway.onBrightnessKeyEvent = { [weak self] event in
+            self?.handleBrightnessKeyEvent(event) ?? false
+        }
+        hotkeyGateway.onCheckerStatusDidChange = { [weak self] in
+            self?.refreshKeyboardCheckerStatus()
+        }
+        hotkeyGateway.applyPreferences(hotkeyPreferences)
+        keyboardCheckerStatus = hotkeyGateway.readCheckerStatus()
+    }
+
+    private func resolveTargetDisplays(pointerLocation: CGPoint?) -> [DisplayState] {
+        let enabledDisplays = displays.filter(\.isEnabled)
+        guard !enabledDisplays.isEmpty else { return [] }
+
+        switch hotkeyPreferences.targetMode {
+        case .followMouseCursor:
+            let resolvedPointer = pointerLocation ?? hotkeyGateway?.currentPointerLocation()
+            if let resolvedPointer,
+                let underCursor = enabledDisplays.first(where: { $0.bounds.contains(resolvedPointer) })
+            {
+                return [underCursor]
+            }
+            if let mainDisplay = enabledDisplays.first(where: \.isMain) {
+                return [mainDisplay]
+            }
+            return []
+        case .allEnabledDisplays:
+            return enabledDisplays
+        case .mainDisplay:
+            if let mainDisplay = enabledDisplays.first(where: \.isMain) {
+                return [mainDisplay]
+            }
+            return []
         }
     }
 

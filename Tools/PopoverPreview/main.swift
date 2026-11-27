@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import OpenBetterDisplayCore
 import OpenBetterDisplayUI
@@ -51,6 +52,29 @@ private final class PreviewBrightnessStore: BrightnessPersistence, @unchecked Se
     func setBrightness(_ level: Double, forKey key: String) {}
 }
 
+private final class PreviewHotkeyPreferencesStore: HotkeyPreferencesPersistence, @unchecked Sendable {
+    func loadPreferences() -> HotkeyPreferences? { nil }
+    func savePreferences(_ preferences: HotkeyPreferences) {}
+}
+
+@MainActor
+private final class PreviewBrightnessHotkeyGateway: BrightnessHotkeyGateway {
+    var onBrightnessKeyEvent: (@MainActor (BrightnessKeyEvent) -> Bool)?
+    var onCheckerStatusDidChange: (@MainActor () -> Void)?
+    private let checkerStatus: KeyboardCheckerStatus
+
+    init(checkerStatus: KeyboardCheckerStatus) {
+        self.checkerStatus = checkerStatus
+    }
+
+    func applyPreferences(_ preferences: HotkeyPreferences) {}
+    func readCheckerStatus() -> KeyboardCheckerStatus { checkerStatus }
+    func currentPointerLocation() -> CGPoint? { nil }
+    func requestAccessibilityPermission() {}
+    func openKeyboardSettings() {}
+    func stop() {}
+}
+
 private final class PreviewFavoriteModesStore: FavoriteModesPersistence, @unchecked Sendable {
     private var slotsByKey: [String: [Int: FavoriteModeRecord]] = [:]
 
@@ -69,6 +93,7 @@ private func renderPreview() {
     var outputPath = "/tmp/openbetterdisplay-preview.png"
     var expandMainID: UInt32?
     var expandModeID: UInt32?
+    var expandHotkeys = false
     var expandManageID: UInt32?
     var disconnectID: UInt32?
 
@@ -81,6 +106,9 @@ private func renderPreview() {
         } else if arg == "--expanded-mode", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             expandModeID = id
             index += 2
+        } else if arg == "--expanded-hotkeys" {
+            expandHotkeys = true
+            index += 1
         } else if arg == "--expanded-manage" {
             if index + 1 < args.count, let id = UInt32(args[index + 1]) {
                 expandManageID = id
@@ -132,7 +160,8 @@ private func renderPreview() {
                     RawDisplayMode(
                         modeID: 14, width: 3024, height: 1964, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0, isNative: true,
                         bitsPerSample: 10)
-                ]
+                ],
+                bounds: CGRect(x: -1512, y: 0, width: 1512, height: 982)
             ),
             RawDisplayInfo(
                 displayID: 20,
@@ -156,7 +185,8 @@ private func renderPreview() {
                         bitsPerSample: 8,
                         isDefault: true
                     )
-                ]
+                ],
+                bounds: CGRect(x: 2560, y: 0, width: 1920, height: 1080)
             ),
             RawDisplayInfo(
                 displayID: 30,
@@ -190,7 +220,8 @@ private func renderPreview() {
                         modeID: 39, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60.0, bitsPerSample: 8),
                     RawDisplayMode(
                         modeID: 40, width: 960, height: 540, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 60.0, bitsPerSample: 8)
-                ]
+                ],
+                bounds: CGRect(x: 0, y: 0, width: 2560, height: 1440)
             )
         ],
         brightnessByID: [
@@ -201,18 +232,28 @@ private func renderPreview() {
     )
 
     let favoriteStore = PreviewFavoriteModesStore()
+    let hotkeyGateway = PreviewBrightnessHotkeyGateway(
+        checkerStatus: KeyboardCheckerStatus(
+            functionKeyMode: .standardFunctionKeys,
+            isAccessibilityTrusted: false
+        )
+    )
     let coordinator = DisplayCoordinator(
         driver: driver,
         brightnessStore: PreviewBrightnessStore(),
         favoriteModesStore: favoriteStore,
-        ddcThrottleInterval: 0
+        ddcThrottleInterval: 0,
+        hotkeyGateway: hotkeyGateway,
+        hotkeyPreferencesStore: PreviewHotkeyPreferencesStore()
     )
 
     if let disconnectID {
         coordinator.setDisplayEnabled(disconnectID, enabled: false)
     }
 
-    if let expandManageID {
+    if expandHotkeys {
+        coordinator.toggleExpandedSection(.hotkeys)
+    } else if let expandManageID {
         if let display = coordinator.displays.first(where: { $0.displayID == expandManageID }) {
             coordinator.assignCurrentModeToFavorite(expandManageID, slot: 1)
             if let alternate = display.availableModes.first(where: { $0.modeID != display.currentModeID }) {

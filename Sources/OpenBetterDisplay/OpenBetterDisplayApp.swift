@@ -88,7 +88,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         let driver = MacOSDisplayDriver()
-        let coordinator = DisplayCoordinator(driver: driver)
+        let hotkeyGateway = MacOSBrightnessHotkeyGateway()
+        let coordinator = DisplayCoordinator(driver: driver, hotkeyGateway: hotkeyGateway)
         coordinator.onRequestPopoverClose = { [weak self] in
             self?.closePopoverImmediately()
         }
@@ -164,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func showPopover() {
         guard let button = statusItem?.button else { return }
         coordinator?.refreshDisplays()
+        coordinator?.refreshKeyboardCheckerStatus()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
 

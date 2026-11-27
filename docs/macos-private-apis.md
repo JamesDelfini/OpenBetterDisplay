@@ -14,6 +14,13 @@ Verified on Apple Silicon (M4 Pro, `arm64`, macOS 26.7.3). All private symbols l
   - Read request (4 bytes): `[0x82, 0x01, 0x10, 0xAC]`, wait `40–50ms`, read 11-byte reply verifying `0x50 ^ r[0...9] == r[10]`, `r[2] == 0x02`, `r[3] == 0x00`, `r[4] == 0x10`, `max = r[6]<<8 | r[7]`, `cur = r[8]<<8 | r[9]`.
 - **Sandbox note:** Seatbelt-sandboxed CLI processes receive `nil` from `IOAVServiceCreateWithService`; unsandboxed ad-hoc signed `OpenBetterDisplay.app` operates normally.
 
+## IOKit (`IOHIDEventSystemClientCreate` — Function-Key Mode Checker)
+
+- **Defining library:** `/System/Library/Frameworks/IOKit.framework/IOKit` (loaded dynamically via `DynamicLibrary`).
+- **Private symbol:** `IOHIDEventSystemClientCreate` (`@convention(c) (CFAllocator?) -> Unmanaged<IOHIDEventSystemClient>?`), returning a `+1` retained client (`takeRetainedValue()`). Do **not** substitute `IOHIDEventSystemClientCreateSimpleClient`, which returns `nil` when reading `"HIDFKeyMode"` via `IOHIDEventSystemClientCopyProperty`.
+- **Fallback & live change notifications:** Fall back to `CFPreferencesCopyAppValue("com.apple.keyboard.fnState" as CFString, kCFPreferencesAnyApplication)` (`Bool`) if `HIDFKeyMode` is unavailable, and observe `DistributedNotificationCenter.default()` for `"com.apple.keyboard.fnstatedidchange"`.
+- **TCC / EventTap invariant:** Never call `CGEvent.tapCreate` (`kCGSessionEventTap`, `NX_SYSDEFINED`) unless `AXIsProcessTrusted()` is already `true`, as `CGEventTapCreate` triggers `SLSRequestListenEventAccess` on untrusted binaries.
+
 ## DisplayServices (Built-in Backlight)
 
 - **Library:** `/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices`

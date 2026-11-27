@@ -105,6 +105,96 @@ final class BrightnessHotkeyTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.brightness ?? -1, 0.60, accuracy: 0.0001)
     }
 
+    func testFollowMouseCursorMatchesBottomEdgeAndRightEdgeInclusiveAfterStrictContainment() {
+        let driver = FakeDisplayDriver(
+            onlineDisplays: [
+                RawDisplayInfo(
+                    displayID: 1,
+                    name: "Built-in Display",
+                    isBuiltIn: true,
+                    isMain: false,
+                    bounds: CGRect(x: -1512, y: 0, width: 1512, height: 982)
+                ),
+                RawDisplayInfo(
+                    displayID: 20,
+                    name: "DELL P2217H",
+                    isBuiltIn: false,
+                    isMain: false,
+                    bounds: CGRect(x: 2560, y: 0, width: 1920, height: 1080)
+                ),
+                RawDisplayInfo(
+                    displayID: 30,
+                    name: "DELL U2725QE",
+                    isBuiltIn: false,
+                    isMain: true,
+                    bounds: CGRect(x: 0, y: 0, width: 2560, height: 1440)
+                )
+            ],
+            brightnessReadings: [
+                1: BrightnessReading(level: 0.50, backend: .nativeAppleBacklight),
+                20: BrightnessReading(level: 0.80, backend: .hardwareDDC),
+                30: BrightnessReading(level: 0.60, backend: .hardwareDDC)
+            ]
+        )
+        let gateway = FakeBrightnessHotkeyGateway()
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            ddcThrottleInterval: 0,
+            writeScheduler: ImmediateBrightnessWriteScheduler(),
+            hotkeyGateway: gateway,
+            hotkeyPreferencesStore: InMemoryHotkeyPreferencesStore()
+        )
+
+        // Bottom edge of Built-in Display (y == bounds.maxY == 982) should hit Built-in Display (passthrough),
+        // not fall back to external Main Display (30).
+        driver.setBrightnessHistory.removeAll()
+        let consumedBuiltInBottomEdge = gateway.simulateKeyEvent(
+            BrightnessKeyEvent(
+                direction: .increase,
+                source: .mediaBrightness,
+                pointerLocation: CGPoint(x: -500, y: 982)
+            )
+        )
+        XCTAssertFalse(consumedBuiltInBottomEdge)
+        XCTAssertTrue(driver.setBrightnessHistory.isEmpty)
+
+        // Shared seam at x == 2560 (maxX of Main 30, minX of DELL P2217H 20): strict containment on display 20 wins
+        let consumedSharedSeam = gateway.simulateKeyEvent(
+            BrightnessKeyEvent(
+                direction: .decrease,
+                source: .mediaBrightness,
+                pointerLocation: CGPoint(x: 2560, y: 500)
+            )
+        )
+        XCTAssertTrue(consumedSharedSeam)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 20 })?.brightness ?? -1, 0.7375, accuracy: 0.0001)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.brightness ?? -1, 0.60, accuracy: 0.0001)
+
+        // Outer right edge of DELL P2217H (x == bounds.maxX == 4480) and bottom edge (y == bounds.maxY == 1080) hit display 20
+        let consumedRightEdge = gateway.simulateKeyEvent(
+            BrightnessKeyEvent(
+                direction: .decrease,
+                source: .mediaBrightness,
+                pointerLocation: CGPoint(x: 4480, y: 500)
+            )
+        )
+        XCTAssertTrue(consumedRightEdge)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 20 })?.brightness ?? -1, 0.675, accuracy: 0.0001)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.brightness ?? -1, 0.60, accuracy: 0.0001)
+
+        let consumedBottomEdge = gateway.simulateKeyEvent(
+            BrightnessKeyEvent(
+                direction: .decrease,
+                source: .mediaBrightness,
+                pointerLocation: CGPoint(x: 3200, y: 1080)
+            )
+        )
+        XCTAssertTrue(consumedBottomEdge)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 20 })?.brightness ?? -1, 0.6125, accuracy: 0.0001)
+        XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.brightness ?? -1, 0.60, accuracy: 0.0001)
+    }
+
     func testAllEnabledDisplaysAndMainDisplayTargetModesFineStepAndBuiltInPassthrough() {
         let driver = FakeDisplayDriver(
             onlineDisplays: [
@@ -149,7 +239,7 @@ final class BrightnessHotkeyTests: XCTestCase {
         // Fine step (1/64 = 0.015625) using gateway's pointerLocation when event.pointerLocation is nil
         XCTAssertTrue(
             gateway.simulateKeyEvent(
-                BrightnessKeyEvent(direction: .decrease, source: .mediaBrightness, isFine: true, isRepeat: true)
+                BrightnessKeyEvent(direction: .decrease, source: .mediaBrightness, isFine: true)
             )
         )
         XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 20 })?.brightness ?? -1, 0.944375, accuracy: 0.0001)
@@ -194,7 +284,7 @@ final class BrightnessHotkeyTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 30 })?.brightness ?? -1, 0.0, accuracy: 0.0001)
 
         // When Built-in Display is Main Display in .mainDisplay mode (or sole enabled display in .allEnabledDisplays),
-        // media brightness keys pass through (false)
+        // media Brightness Hotkeys pass through (false)
         coordinator.setMainDisplay(1)
         driver.setBrightnessHistory.removeAll()
         XCTAssertFalse(
@@ -258,12 +348,7 @@ final class BrightnessHotkeyTests: XCTestCase {
             hotkeyPreferencesStore: store
         )
 
-        var emittedHUDBatches: [[BrightnessHUDUpdate]] = []
-        coordinator.onBrightnessHUDUpdate = { updates in
-            emittedHUDBatches.append(updates)
-        }
-
-        // Literal F1/F2 is opt-in and disabled by default
+        // Literal F1/F2 is opt-in and turned off by default
         XCTAssertFalse(
             gateway.simulateKeyEvent(
                 BrightnessKeyEvent(
@@ -273,7 +358,7 @@ final class BrightnessHotkeyTests: XCTestCase {
                 )
             )
         )
-        XCTAssertTrue(emittedHUDBatches.isEmpty)
+        XCTAssertTrue(gateway.shownHUDUpdates.isEmpty)
 
         // Enable literal F1/F2 -> gateway receives updated preferences
         coordinator.setLiteralF1F2Enabled(true)
@@ -291,7 +376,7 @@ final class BrightnessHotkeyTests: XCTestCase {
             )
         )
         XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 1 })?.brightness ?? -1, 0.4375, accuracy: 0.0001)
-        XCTAssertTrue(emittedHUDBatches.isEmpty)
+        XCTAssertTrue(gateway.shownHUDUpdates.isEmpty)
 
         // All Enabled Displays + literal F2 emits HUD updates ONLY for external displays (20 and 30)
         coordinator.setHotkeyTargetMode(.allEnabledDisplays)
@@ -301,7 +386,7 @@ final class BrightnessHotkeyTests: XCTestCase {
             )
         )
         XCTAssertEqual(
-            emittedHUDBatches.last,
+            gateway.shownHUDUpdates.last,
             [
                 BrightnessHUDUpdate(
                     displayID: 20,
@@ -321,9 +406,8 @@ final class BrightnessHotkeyTests: XCTestCase {
                 )
             ]
         )
-        XCTAssertEqual(coordinator.lastBrightnessHUDUpdates, emittedHUDBatches.last)
 
-        // Disabling Brightness Media Keys prevents media key interception even over external monitors
+        // Disabling Media Keys prevents media trigger interception even over external monitors
         coordinator.setMediaKeysEnabled(false)
         XCTAssertFalse(coordinator.hotkeyPreferences.isMediaKeysEnabled)
         XCTAssertFalse(
@@ -528,20 +612,20 @@ final class BrightnessHotkeyTests: XCTestCase {
         // Initial press fires leading DDC write immediately
         XCTAssertTrue(gateway.simulateKeyEvent(BrightnessKeyEvent(direction: .increase, source: .mediaBrightness)))
         XCTAssertEqual(driver.setBrightnessHistory.map(\.level), [0.5625])
-        XCTAssertEqual(coordinator.lastBrightnessHUDUpdates.first?.brightnessPercentage, 56)
+        XCTAssertEqual(gateway.shownHUDUpdates.last?.first?.brightnessPercentage, 56)
 
         // Rapid hold-repeats coalesce inside 60ms DDC throttle window while updating UI & HUD immediately
         scheduler.advance(by: 0.01)
         XCTAssertTrue(
-            gateway.simulateKeyEvent(BrightnessKeyEvent(direction: .increase, source: .mediaBrightness, isRepeat: true))
+            gateway.simulateKeyEvent(BrightnessKeyEvent(direction: .increase, source: .mediaBrightness))
         )
         scheduler.advance(by: 0.01)
         XCTAssertTrue(
-            gateway.simulateKeyEvent(BrightnessKeyEvent(direction: .increase, source: .mediaBrightness, isRepeat: true))
+            gateway.simulateKeyEvent(BrightnessKeyEvent(direction: .increase, source: .mediaBrightness))
         )
         XCTAssertEqual(driver.setBrightnessHistory.count, 1)
         XCTAssertEqual(coordinator.displays.first?.brightness ?? -1, 0.6875, accuracy: 0.0001)
-        XCTAssertEqual(coordinator.lastBrightnessHUDUpdates.first?.brightnessPercentage, 69)
+        XCTAssertEqual(gateway.shownHUDUpdates.last?.first?.brightnessPercentage, 69)
 
         // Completing the throttle window flushes final value (0.6875)
         scheduler.advance(by: 0.05)
@@ -566,7 +650,6 @@ final class BrightnessHotkeyTests: XCTestCase {
                 direction: .increase,
                 source: .mediaBrightness,
                 isFine: true,
-                isRepeat: false,
                 pointerLocation: CGPoint(x: 100, y: 200)
             )
         )
@@ -586,7 +669,6 @@ final class BrightnessHotkeyTests: XCTestCase {
                 direction: .decrease,
                 source: .mediaBrightness,
                 isFine: false,
-                isRepeat: true,
                 pointerLocation: nil
             )
         )
@@ -694,7 +776,7 @@ final class BrightnessHotkeyTests: XCTestCase {
             )
         )
         XCTAssertEqual(
-            gateway.shownHUDBatches.last,
+            gateway.shownHUDUpdates.last,
             [
                 BrightnessHUDUpdate(
                     displayID: 20,
@@ -708,7 +790,7 @@ final class BrightnessHotkeyTests: XCTestCase {
         )
 
         // 2. Follow Mouse Cursor over Built-in Display passes through to macOS with NO custom HUD emitted
-        let batchCountBeforeBuiltIn = gateway.shownHUDBatches.count
+        let batchCountBeforeBuiltIn = gateway.shownHUDUpdates.count
         XCTAssertFalse(
             gateway.simulateKeyEvent(
                 BrightnessKeyEvent(
@@ -718,7 +800,7 @@ final class BrightnessHotkeyTests: XCTestCase {
                 )
             )
         )
-        XCTAssertEqual(gateway.shownHUDBatches.count, batchCountBeforeBuiltIn)
+        XCTAssertEqual(gateway.shownHUDUpdates.count, batchCountBeforeBuiltIn)
 
         // 3. Main Display mode emits HUD for external Main Display (DELL U2725QE)
         coordinator.setHotkeyTargetMode(.mainDisplay)
@@ -732,7 +814,7 @@ final class BrightnessHotkeyTests: XCTestCase {
             )
         )
         XCTAssertEqual(
-            gateway.shownHUDBatches.last,
+            gateway.shownHUDUpdates.last,
             [
                 BrightnessHUDUpdate(
                     displayID: 30,
@@ -753,7 +835,7 @@ final class BrightnessHotkeyTests: XCTestCase {
             )
         )
         XCTAssertEqual(
-            gateway.shownHUDBatches.last,
+            gateway.shownHUDUpdates.last,
             [
                 BrightnessHUDUpdate(
                     displayID: 20,
@@ -775,7 +857,7 @@ final class BrightnessHotkeyTests: XCTestCase {
         )
 
         // 5. Built-in Display as Main Display in .mainDisplay mode passes through with NO HUD emitted
-        let batchCountBeforeBuiltInMain = gateway.shownHUDBatches.count
+        let batchCountBeforeBuiltInMain = gateway.shownHUDUpdates.count
         coordinator.setMainDisplay(1)
         coordinator.setHotkeyTargetMode(.mainDisplay)
         XCTAssertFalse(
@@ -783,7 +865,7 @@ final class BrightnessHotkeyTests: XCTestCase {
                 BrightnessKeyEvent(direction: .decrease, source: .mediaBrightness)
             )
         )
-        XCTAssertEqual(gateway.shownHUDBatches.count, batchCountBeforeBuiltInMain)
+        XCTAssertEqual(gateway.shownHUDUpdates.count, batchCountBeforeBuiltInMain)
 
         // 6. Follow Mouse Cursor outside bounds or over Disconnected Display falls back to Built-in Main Display -> passthrough, NO HUD
         coordinator.setHotkeyTargetMode(.followMouseCursor)
@@ -796,7 +878,7 @@ final class BrightnessHotkeyTests: XCTestCase {
                 )
             )
         )
-        XCTAssertEqual(gateway.shownHUDBatches.count, batchCountBeforeBuiltInMain)
+        XCTAssertEqual(gateway.shownHUDUpdates.count, batchCountBeforeBuiltInMain)
 
         // 7. All Enabled Displays when only Built-in Display remains enabled passes through with NO HUD emitted
         coordinator.setHotkeyTargetMode(.allEnabledDisplays)
@@ -807,7 +889,7 @@ final class BrightnessHotkeyTests: XCTestCase {
                 BrightnessKeyEvent(direction: .increase, source: .mediaBrightness)
             )
         )
-        XCTAssertEqual(gateway.shownHUDBatches.count, batchCountBeforeBuiltInMain)
+        XCTAssertEqual(gateway.shownHUDUpdates.count, batchCountBeforeBuiltInMain)
     }
 
     func testMacOSBrightnessHotkeyGatewayForwardsHUDUpdatesAndDismissesOnStop() {
@@ -832,5 +914,126 @@ final class BrightnessHotkeyTests: XCTestCase {
 
         gateway.stop()
         XCTAssertEqual(presenter.dismissAllCount, 1)
+    }
+
+    func testBackgroundAccessibilityGrantDetectionViaNotificationAndLightweightPolling() {
+        @MainActor
+        final class ManualPollingScheduler: AccessibilityPollingScheduling {
+            final class Token: AccessibilityPollingCancellable, @unchecked Sendable {
+                var isCancelled = false
+                let onCancel: () -> Void
+
+                init(onCancel: @escaping () -> Void) {
+                    self.onCancel = onCancel
+                }
+
+                nonisolated func cancel() {
+                    MainActor.assumeIsolated {
+                        guard !isCancelled else { return }
+                        isCancelled = true
+                        onCancel()
+                    }
+                }
+            }
+
+            var activeTokens: [Token] = []
+            var scheduledActions: [(token: Token, action: @MainActor () -> Void)] = []
+            var scheduleCount = 0
+
+            func scheduleRepeating(
+                interval: TimeInterval,
+                action: @escaping @MainActor () -> Void
+            ) -> AccessibilityPollingCancellable {
+                scheduleCount += 1
+                var tokenRef: Token?
+                let token = Token { [weak self] in
+                    self?.activeTokens.removeAll { $0 === tokenRef }
+                    self?.scheduledActions.removeAll { $0.token === tokenRef }
+                }
+                tokenRef = token
+                activeTokens.append(token)
+                scheduledActions.append((token: token, action: action))
+                return token
+            }
+
+            func fireTick() {
+                for entry in scheduledActions where !entry.token.isCancelled {
+                    entry.action()
+                }
+            }
+        }
+
+        let notificationCenter = NotificationCenter()
+        let scheduler = ManualPollingScheduler()
+        var isTrusted = false
+        let gateway = MacOSBrightnessHotkeyGateway(
+            hudPresenter: FakeBrightnessHUDPresenter(),
+            accessibilityTrustProvider: { isTrusted },
+            accessibilityPollingScheduler: scheduler,
+            distributedNotificationCenter: notificationCenter
+        )
+
+        var statusChangeCount = 0
+        gateway.onCheckerStatusDidChange = {
+            statusChangeCount += 1
+        }
+
+        // 1. Media keys enabled & untrusted -> lightweight polling starts
+        gateway.applyPreferences(HotkeyPreferences(targetMode: .followMouseCursor, isMediaKeysEnabled: true, isLiteralF1F2Enabled: false))
+        XCTAssertTrue(gateway.isAccessibilityPollingActive)
+        XCTAssertEqual(scheduler.activeTokens.count, 1)
+
+        // Tick while still untrusted does not spam status change callbacks
+        scheduler.fireTick()
+        XCTAssertEqual(statusChangeCount, 0)
+        XCTAssertTrue(gateway.isAccessibilityPollingActive)
+
+        // 2. Disabling Media Keys stops polling immediately
+        gateway.applyPreferences(HotkeyPreferences(targetMode: .followMouseCursor, isMediaKeysEnabled: false, isLiteralF1F2Enabled: false))
+        XCTAssertFalse(gateway.isAccessibilityPollingActive)
+        XCTAssertTrue(scheduler.activeTokens.isEmpty)
+
+        // Re-enabling while untrusted restarts polling
+        gateway.applyPreferences(HotkeyPreferences(targetMode: .followMouseCursor, isMediaKeysEnabled: true, isLiteralF1F2Enabled: false))
+        XCTAssertTrue(gateway.isAccessibilityPollingActive)
+        XCTAssertEqual(scheduler.activeTokens.count, 1)
+
+        // 3. Granting Accessibility in background -> polling tick detects trust, stops timer, and notifies coordinator
+        isTrusted = true
+        scheduler.fireTick()
+        XCTAssertFalse(gateway.isAccessibilityPollingActive)
+        XCTAssertTrue(scheduler.activeTokens.isEmpty)
+        XCTAssertEqual(statusChangeCount, 1)
+        XCTAssertTrue(gateway.readCheckerStatus().isAccessibilityTrusted)
+
+        // 4. Reset to untrusted and verify com.apple.accessibility.api distributed notification stops polling & notifies live
+        isTrusted = false
+        gateway.applyPreferences(HotkeyPreferences(targetMode: .followMouseCursor, isMediaKeysEnabled: true, isLiteralF1F2Enabled: false))
+        XCTAssertTrue(gateway.isAccessibilityPollingActive)
+        let countBeforeNotification = statusChangeCount
+
+        isTrusted = true
+        notificationCenter.post(name: Notification.Name("com.apple.accessibility.api"), object: nil)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertFalse(gateway.isAccessibilityPollingActive)
+        XCTAssertTrue(scheduler.activeTokens.isEmpty)
+        XCTAssertGreaterThan(statusChangeCount, countBeforeNotification)
+
+        // 5. stop() stops polling immediately while untrusted, and subsequent readCheckerStatus does not restart it
+        isTrusted = false
+        gateway.applyPreferences(HotkeyPreferences(targetMode: .followMouseCursor, isMediaKeysEnabled: true, isLiteralF1F2Enabled: false))
+        XCTAssertTrue(gateway.isAccessibilityPollingActive)
+        gateway.stop()
+        XCTAssertFalse(gateway.isAccessibilityPollingActive)
+        XCTAssertTrue(scheduler.activeTokens.isEmpty)
+        _ = gateway.readCheckerStatus()
+        XCTAssertFalse(gateway.isAccessibilityPollingActive)
+        XCTAssertTrue(scheduler.activeTokens.isEmpty)
+
+        // 6. When already trusted, enabling media keys never starts accessibility polling
+        isTrusted = true
+        gateway.applyPreferences(HotkeyPreferences(targetMode: .followMouseCursor, isMediaKeysEnabled: true, isLiteralF1F2Enabled: false))
+        XCTAssertFalse(gateway.isAccessibilityPollingActive)
+        XCTAssertTrue(scheduler.activeTokens.isEmpty)
     }
 }

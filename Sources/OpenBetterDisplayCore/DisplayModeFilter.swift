@@ -1,16 +1,16 @@
 import Foundation
 
 public enum DisplayModeFilter {
-    private static let knownAspectRatios: [(ratio: Double, label: String, tolerance: Double)] = [
-        (5.0 / 4.0, "5:4", 0.015),
-        (4.0 / 3.0, "4:3", 0.015),
-        (3.0 / 2.0, "3:2", 0.015),
-        (16.0 / 10.0, "16:10", 0.015),
-        (16.0 / 9.0, "16:9", 0.015),
-        (19.0 / 10.0, "19:10", 0.015),
-        (24.0 / 10.0, "24:10", 0.015),
-        (21.0 / 9.0, "21:9", 0.04),
-        (32.0 / 9.0, "32:9", 0.02)
+    private static let knownAspectRatios: [(ratio: Double, key: AspectRatioFilterKey, tolerance: Double)] = [
+        (5.0 / 4.0, AspectRatioFilterKey(5, 4), 0.015),
+        (4.0 / 3.0, AspectRatioFilterKey(4, 3), 0.015),
+        (3.0 / 2.0, AspectRatioFilterKey(3, 2), 0.015),
+        (16.0 / 10.0, AspectRatioFilterKey(16, 10), 0.015),
+        (16.0 / 9.0, AspectRatioFilterKey(16, 9), 0.015),
+        (19.0 / 10.0, AspectRatioFilterKey(19, 10), 0.015),
+        (24.0 / 10.0, AspectRatioFilterKey(24, 10), 0.015),
+        (21.0 / 9.0, AspectRatioFilterKey(21, 9), 0.04),
+        (32.0 / 9.0, AspectRatioFilterKey(32, 9), 0.02)
     ]
 
     public static func filterModes(for raw: RawDisplayInfo) -> [DisplayModeOption] {
@@ -41,22 +41,23 @@ public enum DisplayModeFilter {
             if abs(lhs.refreshRate - rhs.refreshRate) > 0.01 {
                 return lhs.refreshRate > rhs.refreshRate
             }
-            let lhsVRR = normalizeVRR(
-                isVRR: lhs.isVRR,
-                isProMotion: lhs.isProMotion,
+            let lhsVariable = normalizeVariableRefreshRate(
+                isVariableRefreshRate: lhs.isVariableRefreshRate,
                 minRefreshRate: lhs.minRefreshRate,
                 maxRefreshRate: lhs.refreshRate
             )
-            let rhsVRR = normalizeVRR(
-                isVRR: rhs.isVRR,
-                isProMotion: rhs.isProMotion,
+            let rhsVariable = normalizeVariableRefreshRate(
+                isVariableRefreshRate: rhs.isVariableRefreshRate,
                 minRefreshRate: rhs.minRefreshRate,
                 maxRefreshRate: rhs.refreshRate
             )
-            if lhsVRR.isVRR != rhsVRR.isVRR {
-                return lhsVRR.isVRR && !rhsVRR.isVRR
+            if lhsVariable.isVariableRefreshRate != rhsVariable.isVariableRefreshRate {
+                return lhsVariable.isVariableRefreshRate && !rhsVariable.isVariableRefreshRate
             }
-            if let lhsMin = lhsVRR.minRefreshRate, let rhsMin = rhsVRR.minRefreshRate, abs(lhsMin - rhsMin) > 0.01 {
+            if let lhsMin = lhsVariable.minRefreshRate,
+                let rhsMin = rhsVariable.minRefreshRate,
+                abs(lhsMin - rhsMin) > 0.01
+            {
                 return lhsMin > rhsMin
             }
             if lhs.bitsPerSample != rhs.bitsPerSample {
@@ -69,30 +70,19 @@ public enum DisplayModeFilter {
     }
 
     public static func resolveFilteredModes(
-        for raw: RawDisplayInfo,
-        availableModes: [DisplayModeOption],
-        defaultMode: DisplayModeOption?,
-        nativeMode: DisplayModeOption?,
-        currentModeOption: DisplayModeOption?,
+        context: DisplayModeContext,
         persistedCriteria: DisplayModeFilterCriteria?
     ) -> (filteredModes: [DisplayModeOption], filterState: DisplayModeFilterState) {
-        let options = deriveFilterOptions(from: availableModes)
+        let options = deriveFilterOptions(from: context.availableModes)
         let isCustomized = persistedCriteria != nil
         let rawCriteria: DisplayModeFilterCriteria
         if let persistedCriteria {
             rawCriteria = sanitizeCriteria(persistedCriteria, against: options)
         } else {
-            rawCriteria = defaultFilterCriteria(
-                for: raw,
-                availableModes: availableModes,
-                defaultMode: defaultMode,
-                nativeMode: nativeMode,
-                currentModeOption: currentModeOption,
-                options: options
-            )
+            rawCriteria = defaultFilterCriteria(context: context, options: options)
         }
 
-        let filtered = applyCriteria(rawCriteria, to: availableModes)
+        let filtered = applyCriteria(rawCriteria, to: context.availableModes)
         let state = DisplayModeFilterState(
             availableOptions: options,
             activeCriteria: rawCriteria,
@@ -106,52 +96,8 @@ public enum DisplayModeFilter {
             return DisplayModeFilterOptions()
         }
 
-        var aspectRatiosByLabel: [String: Double] = [:]
-        for mode in availableModes {
-            if aspectRatiosByLabel[mode.aspectRatioLabel] == nil, mode.height > 0 {
-                aspectRatiosByLabel[mode.aspectRatioLabel] = Double(mode.width) / Double(mode.height)
-            }
-        }
-        let sortedAspects = aspectRatiosByLabel.keys.sorted { lhs, rhs in
-            let lhsRatio = aspectRatiosByLabel[lhs] ?? 0
-            let rhsRatio = aspectRatiosByLabel[rhs] ?? 0
-            if abs(lhsRatio - rhsRatio) > 0.005 {
-                return lhsRatio < rhsRatio
-            }
-            return lhs < rhs
-        }
-
-        struct RefreshSortKey {
-            let maxRate: Double
-            let isVariable: Bool
-            let minRate: Double
-        }
-        var refreshKeysByLabel: [String: RefreshSortKey] = [:]
-        for mode in availableModes {
-            if let label = mode.refreshRateLabel, refreshKeysByLabel[label] == nil {
-                refreshKeysByLabel[label] = RefreshSortKey(
-                    maxRate: mode.refreshRate,
-                    isVariable: mode.isVRR,
-                    minRate: mode.minRefreshRate ?? mode.refreshRate
-                )
-            }
-        }
-        let sortedRefreshRates = refreshKeysByLabel.keys.sorted { lhs, rhs in
-            guard let lhsKey = refreshKeysByLabel[lhs], let rhsKey = refreshKeysByLabel[rhs] else {
-                return lhs < rhs
-            }
-            if abs(lhsKey.maxRate - rhsKey.maxRate) > 0.005 {
-                return lhsKey.maxRate > rhsKey.maxRate
-            }
-            if lhsKey.isVariable != rhsKey.isVariable {
-                return lhsKey.isVariable && !rhsKey.isVariable
-            }
-            if abs(lhsKey.minRate - rhsKey.minRate) > 0.005 {
-                return lhsKey.minRate > rhsKey.minRate
-            }
-            return lhs > rhs
-        }
-
+        let sortedAspects = Set(availableModes.map(\.aspectRatioKey)).sorted()
+        let sortedRefreshRates = Set(availableModes.compactMap(\.refreshRateKey)).sorted(by: >)
         let sortedColorDepths = Set(availableModes.map(\.bitsPerSample)).sorted(by: >)
         let presentTiers = Set(availableModes.map(\.scalingTier))
         let sortedScaling = DisplayModeScalingTier.allCases.filter { presentTiers.contains($0) }
@@ -173,11 +119,11 @@ public enum DisplayModeFilter {
         }
 
         return availableModes.filter { mode in
-            if !criteria.aspectRatios.isEmpty, !criteria.aspectRatios.contains(mode.aspectRatioLabel) {
+            if !criteria.aspectRatios.isEmpty, !criteria.aspectRatios.contains(mode.aspectRatioKey) {
                 return false
             }
             if !criteria.refreshRates.isEmpty {
-                guard let label = mode.refreshRateLabel, criteria.refreshRates.contains(label) else {
+                guard let rateKey = mode.refreshRateKey, criteria.refreshRates.contains(rateKey) else {
                     return false
                 }
             }
@@ -198,10 +144,10 @@ public enum DisplayModeFilter {
     ) -> DisplayModeFilterCriteria {
         var next = current
         switch chip {
-        case .aspectRatio(let label):
-            updateChipGroup(&next.aspectRatios, value: label, multiSelect: multiSelect)
-        case .refreshRate(let label):
-            updateChipGroup(&next.refreshRates, value: label, multiSelect: multiSelect)
+        case .aspectRatio(let ratio):
+            updateChipGroup(&next.aspectRatios, value: ratio, multiSelect: multiSelect)
+        case .refreshRate(let rate):
+            updateChipGroup(&next.refreshRates, value: rate, multiSelect: multiSelect)
         case .colorDepth(let bits):
             updateChipGroup(&next.colorDepths, value: bits, multiSelect: multiSelect)
         case .scaling(let tier):
@@ -301,18 +247,56 @@ public enum DisplayModeFilter {
             && mode.pixelHeight == record.pixelHeight
             && abs(mode.refreshRate - record.refreshRate) <= 0.05
             && mode.bitsPerSample == record.bitsPerSample
+            && mode.isVariableRefreshRate == record.isVariableRefreshRate
+            && matchesMinRefreshRate(mode.minRefreshRate, record.minRefreshRate)
+    }
+
+    public static func fallbackModeOption(for record: FavoriteModeRecord) -> DisplayModeOption {
+        makeModeOption(
+            mode: RawDisplayMode(
+                modeID: record.modeID,
+                width: record.width,
+                height: record.height,
+                pixelWidth: record.pixelWidth,
+                pixelHeight: record.pixelHeight,
+                refreshRate: record.refreshRate,
+                bitsPerSample: record.bitsPerSample,
+                isVariableRefreshRate: record.isVariableRefreshRate,
+                minRefreshRate: record.minRefreshRate
+            )
+        )
+    }
+
+    private static func matchesMinRefreshRate(_ lhs: Double?, _ rhs: Double?) -> Bool {
+        switch (lhs, rhs) {
+        case (.none, .none):
+            return true
+        case (.some(let left), .some(let right)):
+            return abs(left - right) <= 0.05
+        default:
+            return false
+        }
     }
 
     public static func makeModeOption(mode: RawDisplayMode) -> DisplayModeOption {
         let isHiDPI = isHiDPIMode(mode)
         let isOneToOneNative = mode.isNative && mode.width == mode.pixelWidth && mode.height == mode.pixelHeight
         let bits = max(1, mode.bitsPerSample)
-        let vrr = normalizeVRR(
-            isVRR: mode.isVRR,
-            isProMotion: mode.isProMotion,
+        let variableRate = normalizeVariableRefreshRate(
+            isVariableRefreshRate: mode.isVariableRefreshRate,
             minRefreshRate: mode.minRefreshRate,
             maxRefreshRate: mode.refreshRate
         )
+        let aspectKey = aspectRatioKey(width: mode.width, height: mode.height)
+        let rateKey: RefreshRateFilterKey? =
+            mode.refreshRate > 0.5
+            ? RefreshRateFilterKey(
+                isVariableRefreshRate: variableRate.isVariableRefreshRate,
+                minRefreshRate: variableRate.minRefreshRate,
+                maxRefreshRate: mode.refreshRate
+            )
+            : nil
+
         return DisplayModeOption(
             modeID: mode.modeID,
             width: mode.width,
@@ -324,14 +308,15 @@ public enum DisplayModeFilter {
             isHiDPI: isHiDPI,
             isDefault: mode.isDefault,
             isNative: isOneToOneNative,
-            isVRR: vrr.isVRR,
-            isProMotion: vrr.isProMotion,
-            minRefreshRate: vrr.minRefreshRate,
-            aspectRatioLabel: formatAspectRatio(width: mode.width, height: mode.height),
+            isVariableRefreshRate: variableRate.isVariableRefreshRate,
+            minRefreshRate: variableRate.minRefreshRate,
+            aspectRatioKey: aspectKey,
+            refreshRateKey: rateKey,
+            aspectRatioLabel: aspectKey.label,
             refreshRateLabel: formatShortRefreshRate(
                 refreshRate: mode.refreshRate,
-                isVRR: vrr.isVRR,
-                minRefreshRate: vrr.minRefreshRate
+                isVariableRefreshRate: variableRate.isVariableRefreshRate,
+                minRefreshRate: variableRate.minRefreshRate
             ),
             colorDepthLabel: "\(bits)bit",
             resolutionLabel: "\(mode.width)x\(mode.height)"
@@ -352,19 +337,15 @@ public enum DisplayModeFilter {
         }
         guard !matchingModes.isEmpty else { return [] }
 
-        var grouped: [RefreshRateBucketKey: DisplayModeOption] = [:]
+        var grouped: [RefreshRateFilterKey: DisplayModeOption] = [:]
         for mode in matchingModes {
-            let vrr = normalizeVRR(
-                isVRR: mode.isVRR,
-                isProMotion: mode.isProMotion,
-                minRefreshRate: mode.minRefreshRate,
-                maxRefreshRate: mode.refreshRate
-            )
-            let key = RefreshRateBucketKey(
-                isVRR: vrr.isVRR,
-                minHzHundredths: vrr.minRefreshRate.map { Int(($0 * 100.0).rounded()) },
-                maxHzHundredths: Int((mode.refreshRate * 100.0).rounded())
-            )
+            let key =
+                mode.refreshRateKey
+                ?? RefreshRateFilterKey(
+                    isVariableRefreshRate: mode.isVariableRefreshRate,
+                    minRefreshRate: mode.minRefreshRate,
+                    maxRefreshRate: mode.refreshRate
+                )
             if let existing = grouped[key] {
                 if isPreferredRefreshRateCandidate(mode, over: existing, activeMode: activeMode) {
                     grouped[key] = mode
@@ -379,8 +360,8 @@ public enum DisplayModeFilter {
             if lhs.isNTSC != rhs.isNTSC {
                 return !lhs.isNTSC && rhs.isNTSC
             }
-            if !lhs.isNTSC, lhs.isVRR != rhs.isVRR {
-                return lhs.isVRR && !rhs.isVRR
+            if !lhs.isNTSC, lhs.isVariableRefreshRate != rhs.isVariableRefreshRate {
+                return lhs.isVariableRefreshRate && !rhs.isVariableRefreshRate
             }
             if abs(lhs.refreshRate - rhs.refreshRate) > 0.005 {
                 return lhs.refreshRate > rhs.refreshRate
@@ -393,12 +374,6 @@ public enum DisplayModeFilter {
             return lhs.modeID < rhs.modeID
         }
         return options
-    }
-
-    private struct RefreshRateBucketKey: Hashable {
-        let isVRR: Bool
-        let minHzHundredths: Int?
-        let maxHzHundredths: Int
     }
 
     private static func isPreferredRefreshRateCandidate(
@@ -446,42 +421,17 @@ public enum DisplayModeFilter {
     }
 
     private static func defaultFilterCriteria(
-        for raw: RawDisplayInfo,
-        availableModes: [DisplayModeOption],
-        defaultMode: DisplayModeOption?,
-        nativeMode: DisplayModeOption?,
-        currentModeOption: DisplayModeOption?,
+        context: DisplayModeContext,
         options: DisplayModeFilterOptions
     ) -> DisplayModeFilterCriteria {
-        guard !availableModes.isEmpty else {
+        guard !context.availableModes.isEmpty else {
             return .unrestricted
         }
 
-        let nativeAspect = resolveNativeAspectRatio(
-            raw: raw,
-            defaultMode: defaultMode,
-            nativeMode: nativeMode,
-            currentModeOption: currentModeOption,
-            options: options
-        )
-        let activeRefreshRate = resolveActiveRefreshRate(
-            defaultMode: defaultMode,
-            currentModeOption: currentModeOption,
-            options: options
-        )
-        let activeColorDepth = resolveActiveColorDepth(
-            defaultMode: defaultMode,
-            currentModeOption: currentModeOption,
-            options: options
-        )
-        let preferredScaling = resolvePreferredScalingTier(
-            raw: raw,
-            availableModes: availableModes,
-            defaultMode: defaultMode,
-            nativeMode: nativeMode,
-            currentModeOption: currentModeOption,
-            options: options
-        )
+        let nativeAspect = resolveNativeAspectRatio(context: context, options: options)
+        let activeRefreshRate = resolveActiveRefreshRate(context: context, options: options)
+        let activeColorDepth = resolveActiveColorDepth(context: context, options: options)
+        let preferredScaling = resolvePreferredScalingTier(context: context, options: options)
 
         return DisplayModeFilterCriteria(
             aspectRatios: nativeAspect.map { [$0] } ?? [],
@@ -492,79 +442,72 @@ public enum DisplayModeFilter {
     }
 
     private static func resolveNativeAspectRatio(
-        raw: RawDisplayInfo,
-        defaultMode: DisplayModeOption?,
-        nativeMode: DisplayModeOption?,
-        currentModeOption: DisplayModeOption?,
+        context: DisplayModeContext,
         options: DisplayModeFilterOptions
-    ) -> String? {
-        if let nativeAspect = nativeMode?.aspectRatioLabel, options.aspectRatios.contains(nativeAspect) {
+    ) -> AspectRatioFilterKey? {
+        if let nativeAspect = context.nativeMode?.aspectRatioKey, options.aspectRatios.contains(nativeAspect) {
             return nativeAspect
         }
-        if let nativeFlagged = raw.modes.first(where: { $0.isNative && $0.isUsableForDesktopGUI && !$0.isStretched && $0.height >= 720 }) {
-            let label = formatAspectRatio(width: nativeFlagged.width, height: nativeFlagged.height)
-            if options.aspectRatios.contains(label) {
-                return label
+        if let nativeFlagged = context.raw.modes.first(where: {
+            $0.isNative && $0.isUsableForDesktopGUI && !$0.isStretched && $0.height >= 720
+        }) {
+            let key = aspectRatioKey(width: nativeFlagged.width, height: nativeFlagged.height)
+            if options.aspectRatios.contains(key) {
+                return key
             }
         }
-        if let defaultAspect = defaultMode?.aspectRatioLabel, options.aspectRatios.contains(defaultAspect) {
+        if let defaultAspect = context.defaultMode?.aspectRatioKey, options.aspectRatios.contains(defaultAspect) {
             return defaultAspect
         }
-        if let currentAspect = currentModeOption?.aspectRatioLabel, options.aspectRatios.contains(currentAspect) {
+        if let currentAspect = context.currentModeOption?.aspectRatioKey, options.aspectRatios.contains(currentAspect) {
             return currentAspect
         }
         return options.aspectRatios.first
     }
 
     private static func resolveActiveRefreshRate(
-        defaultMode: DisplayModeOption?,
-        currentModeOption: DisplayModeOption?,
+        context: DisplayModeContext,
         options: DisplayModeFilterOptions
-    ) -> String? {
-        if let currentRate = currentModeOption?.refreshRateLabel, options.refreshRates.contains(currentRate) {
+    ) -> RefreshRateFilterKey? {
+        if let currentRate = context.currentModeOption?.refreshRateKey, options.refreshRates.contains(currentRate) {
             return currentRate
         }
-        if let defaultRate = defaultMode?.refreshRateLabel, options.refreshRates.contains(defaultRate) {
+        if let defaultRate = context.defaultMode?.refreshRateKey, options.refreshRates.contains(defaultRate) {
             return defaultRate
         }
         return options.refreshRates.first
     }
 
     private static func resolveActiveColorDepth(
-        defaultMode: DisplayModeOption?,
-        currentModeOption: DisplayModeOption?,
+        context: DisplayModeContext,
         options: DisplayModeFilterOptions
     ) -> Int? {
-        if let currentDepth = currentModeOption?.bitsPerSample, options.colorDepths.contains(currentDepth) {
+        if let currentDepth = context.currentModeOption?.bitsPerSample, options.colorDepths.contains(currentDepth) {
             return currentDepth
         }
-        if let defaultDepth = defaultMode?.bitsPerSample, options.colorDepths.contains(defaultDepth) {
+        if let defaultDepth = context.defaultMode?.bitsPerSample, options.colorDepths.contains(defaultDepth) {
             return defaultDepth
         }
         return options.colorDepths.first
     }
 
     private static func resolvePreferredScalingTier(
-        raw: RawDisplayInfo,
-        availableModes: [DisplayModeOption],
-        defaultMode: DisplayModeOption?,
-        nativeMode: DisplayModeOption?,
-        currentModeOption: DisplayModeOption?,
+        context: DisplayModeContext,
         options: DisplayModeFilterOptions
     ) -> DisplayModeScalingTier? {
-        if let defaultMode, options.scalingTiers.contains(defaultMode.scalingTier) {
+        if let defaultMode = context.defaultMode, options.scalingTiers.contains(defaultMode.scalingTier) {
             return defaultMode.scalingTier
         }
         let nativePixelWidth =
-            nativeMode?.pixelWidth
-            ?? availableModes.filter { !$0.isHiDPI }.map(\.pixelWidth).max()
-            ?? availableModes.map(\.pixelWidth).max()
+            context.nativeMode?.pixelWidth
+            ?? context.availableModes.filter { !$0.isHiDPI }.map(\.pixelWidth).max()
+            ?? context.availableModes.map(\.pixelWidth).max()
             ?? 0
-        let hiDPICount = availableModes.filter(\.isHiDPI).count
+        let hiDPICount = context.availableModes.filter(\.isHiDPI).count
         let prefersHiDPI =
-            (raw.isBuiltIn && nativePixelWidth >= 2560)
+            (context.raw.isBuiltIn && nativePixelWidth >= 2560)
             || nativePixelWidth >= 3000
-            || (currentModeOption?.isHiDPI == true && hiDPICount >= 2)
+            || (context.currentModeOption?.isHiDPI == true && hiDPICount >= 2)
         if prefersHiDPI, options.scalingTiers.contains(.hiDPI) {
             return .hiDPI
         }
@@ -614,13 +557,15 @@ public enum DisplayModeFilter {
         }
     }
 
-    private static func formatAspectRatio(width: Int, height: Int) -> String {
-        guard width > 0, height > 0 else { return "—" }
+    static func aspectRatioKey(width: Int, height: Int) -> AspectRatioFilterKey {
+        guard width > 0, height > 0 else {
+            return AspectRatioFilterKey(0, 0)
+        }
         let ratio = Double(width) / Double(height)
 
         for entry in knownAspectRatios {
             if abs(ratio - entry.ratio) <= entry.tolerance {
-                return entry.label
+                return entry.key
             }
         }
 
@@ -628,94 +573,82 @@ public enum DisplayModeFilter {
         let simplifiedW = width / divisor
         let simplifiedH = height / divisor
         if simplifiedH <= 20 {
-            return "\(simplifiedW):\(simplifiedH)"
+            return AspectRatioFilterKey(simplifiedW, simplifiedH)
         }
 
         let tenths = Int((ratio * 100.0).rounded())
         if tenths % 10 == 0 {
-            return "\(tenths / 10):10"
+            return AspectRatioFilterKey(tenths / 10, 10)
         }
-        return "\(tenths / 10).\(tenths % 10):10"
+        return AspectRatioFilterKey(widthTenths: tenths, heightTenths: 100)
     }
 
-    static func normalizeVRR(
-        isVRR: Bool,
-        isProMotion: Bool,
+    static func normalizeVariableRefreshRate(
+        isVariableRefreshRate: Bool,
         minRefreshRate: Double?,
         maxRefreshRate: Double
-    ) -> (isVRR: Bool, isProMotion: Bool, minRefreshRate: Double?) {
-        let effectiveIsVRR = isVRR || isProMotion
-        guard effectiveIsVRR else {
-            return (false, false, nil)
+    ) -> (isVariableRefreshRate: Bool, minRefreshRate: Double?) {
+        guard isVariableRefreshRate else {
+            return (false, nil)
         }
         if let minRefreshRate,
             minRefreshRate > 0.5,
             minRefreshRate < maxRefreshRate - 0.5
         {
-            return (true, isProMotion, minRefreshRate)
+            return (true, minRefreshRate)
         }
-        if isProMotion, maxRefreshRate > 24.5 {
-            return (true, true, 24.0)
-        }
-        return (true, isProMotion, nil)
+        return (true, nil)
     }
 
     private static func makeRefreshRateOption(from mode: DisplayModeOption) -> RefreshRateOption {
-        let vrr = normalizeVRR(
-            isVRR: mode.isVRR,
-            isProMotion: mode.isProMotion,
+        let variableRate = normalizeVariableRefreshRate(
+            isVariableRefreshRate: mode.isVariableRefreshRate,
             minRefreshRate: mode.minRefreshRate,
             maxRefreshRate: mode.refreshRate
         )
-        let isNTSC = isNTSCRefreshRate(mode.refreshRate, isVRR: vrr.isVRR)
+        let isNTSC = isNTSCRefreshRate(mode.refreshRate, isVariableRefreshRate: variableRate.isVariableRefreshRate)
         let shortLabel =
             formatShortRefreshRate(
                 refreshRate: mode.refreshRate,
-                isVRR: vrr.isVRR,
-                minRefreshRate: vrr.minRefreshRate
+                isVariableRefreshRate: variableRate.isVariableRefreshRate,
+                minRefreshRate: variableRate.minRefreshRate
             ) ?? ""
-        let label = vrr.isVRR ? "\(shortLabel) (Variable)" : shortLabel
+        let label = variableRate.isVariableRefreshRate ? "\(shortLabel) (Variable)" : shortLabel
 
         return RefreshRateOption(
             modeID: mode.modeID,
             refreshRate: mode.refreshRate,
-            minRefreshRate: vrr.minRefreshRate,
-            isVRR: vrr.isVRR,
-            isProMotion: vrr.isProMotion,
+            minRefreshRate: variableRate.minRefreshRate,
+            isVariableRefreshRate: variableRate.isVariableRefreshRate,
             isNTSC: isNTSC,
             label: label,
             shortLabel: shortLabel
         )
     }
 
-    private static func isNTSCRefreshRate(_ refreshRate: Double, isVRR: Bool) -> Bool {
-        guard !isVRR, refreshRate > 0.5 else { return false }
+    private static func isNTSCRefreshRate(_ refreshRate: Double, isVariableRefreshRate: Bool) -> Bool {
+        guard !isVariableRefreshRate, refreshRate > 0.5 else { return false }
         return abs(refreshRate - refreshRate.rounded()) >= 0.01
     }
 
     private static func formatShortRefreshRate(
         refreshRate: Double,
-        isVRR: Bool,
+        isVariableRefreshRate: Bool,
         minRefreshRate: Double?
     ) -> String? {
-        guard let maxNumber = formatRateNumber(refreshRate) else { return nil }
-        if isVRR,
-            let minRefreshRate,
-            minRefreshRate < refreshRate - 0.5,
-            let minNumber = formatRateNumber(minRefreshRate)
-        {
-            return "\(minNumber)–\(maxNumber)Hz"
-        }
-        return "\(maxNumber)Hz"
-    }
-
-    private static func formatRateNumber(_ refreshRate: Double) -> String? {
         guard refreshRate > 0.5 else { return nil }
-        let rounded = refreshRate.rounded()
-        if abs(refreshRate - rounded) < 0.01 {
-            return "\(Int(rounded))"
+        let key = RefreshRateFilterKey(
+            isVariableRefreshRate: isVariableRefreshRate,
+            minRefreshRate: minRefreshRate,
+            maxRefreshRate: refreshRate
+        )
+        if key.isVariableRefreshRate,
+            key.minHundredths == nil,
+            let maxNumber = RefreshRateFilterKey.formatRateNumber(hundredths: key.maxHundredths)
+        {
+            return "\(maxNumber)Hz"
         }
-        return String(format: "%.2f", refreshRate)
+        return key.label
     }
 
     private static func gcd(_ a: Int, _ b: Int) -> Int {

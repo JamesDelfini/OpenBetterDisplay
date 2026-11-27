@@ -128,7 +128,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(driver.setBrightnessHistory.first?.displayID, 1)
         XCTAssertEqual(driver.setBrightnessHistory.first?.level, 0.42)
 
-        // External system brightness key changes sync cleanly on routine refresh
+        // External system Brightness Hotkey changes sync cleanly on routine refresh
         driver.brightnessReadings[1] = BrightnessReading(level: 0.80, backend: .nativeAppleBacklight)
         coordinator.refreshDisplays()
         XCTAssertEqual(coordinator.displays.first?.brightness, 0.80)
@@ -180,7 +180,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(driver.setBrightnessHistory.filter { $0.displayID == 20 }.map(\.level), [0.45])
     }
 
-    func testBuiltInDisplaySyncsExternalMacOSBrightnessKeyChangesWithoutPollingExternalMonitors() {
+    func testBuiltInDisplaySyncsExternalMacOSBrightnessHotkeyChangesWithoutPollingExternalMonitors() {
         let store = InMemoryBrightnessStore()
         let driver = FakeDisplayDriver(
             onlineDisplays: [
@@ -202,7 +202,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         coordinator.setBrightness(1, level: 0.42)
         XCTAssertEqual(store.brightness(forKey: "builtin"), 0.42)
 
-        // User presses MacBook brightness keys outside OpenBetterDisplay -> macOS moves backlight to 0.78
+        // User presses MacBook Brightness Hotkeys outside OpenBetterDisplay -> macOS moves backlight to 0.78
         driver.brightnessReadings[1] = BrightnessReading(level: 0.78, backend: .nativeAppleBacklight)
         driver.getBrightnessHistory.removeAll()
         driver.setBrightnessHistory.removeAll()
@@ -216,7 +216,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(driver.getBrightnessHistory, [1])
         XCTAssertTrue(driver.setBrightnessHistory.isEmpty)
 
-        // Another brightness key press followed by popover-open refreshDisplays() also updates state and store
+        // Another Brightness Hotkey press followed by popover-open refreshDisplays() also updates state and store
         driver.brightnessReadings[1] = BrightnessReading(level: 0.25, backend: .nativeAppleBacklight)
         coordinator.refreshDisplays()
         XCTAssertEqual(coordinator.displays.first(where: { $0.displayID == 1 })?.brightness, 0.25)
@@ -922,7 +922,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "1920x1080")
     }
 
-    func testDisplayModeSelectionIsIgnoredForDisabledDisplay() {
+    func testDisplayModeSelectionIsIgnoredForDisconnectedDisplay() {
         let modes: [RawDisplayMode] = [
             RawDisplayMode(modeID: 101, width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0),
             RawDisplayMode(modeID: 102, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0)
@@ -948,7 +948,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first?.currentModeID, 101)
     }
 
-    func testRefreshRateOptionsGroupActiveResolutionAndTierWithVRRIntegerAndExposedNTSCRates() {
+    func testRefreshRateOptionsGroupActiveResolutionAndTierWithVariableIntegerAndExposedNTSCRates() {
         let builtInModes: [RawDisplayMode] = [
             RawDisplayMode(
                 modeID: 10,
@@ -960,8 +960,7 @@ final class DisplayCoordinatorTests: XCTestCase {
                 isNative: true,
                 bitsPerSample: 10,
                 isDefault: true,
-                isVRR: true,
-                isProMotion: true,
+                isVariableRefreshRate: true,
                 minRefreshRate: 24.0
             ),
             RawDisplayMode(
@@ -1049,7 +1048,7 @@ final class DisplayCoordinatorTests: XCTestCase {
                 pixelHeight: 2880,
                 refreshRate: 120.0,
                 bitsPerSample: 10,
-                isVRR: true,
+                isVariableRefreshRate: true,
                 minRefreshRate: 48.0
             ),
             RawDisplayMode(
@@ -1094,7 +1093,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         let builtInNTSC = builtIn.refreshRateOptions.filter(\.isNTSC)
         XCTAssertEqual(builtInPrimary.map(\.modeID), [10, 11])
         XCTAssertEqual(builtInPrimary.map(\.label), ["24–120Hz (Variable)", "60Hz"])
-        XCTAssertEqual(builtInPrimary.map(\.isVRR), [true, false])
+        XCTAssertEqual(builtInPrimary.map(\.isVariableRefreshRate), [true, false])
         XCTAssertEqual(builtInNTSC.map(\.modeID), [12, 13, 14, 15, 16])
         XCTAssertEqual(builtInNTSC.map(\.label), ["119.88Hz", "59.94Hz", "47.95Hz", "29.97Hz", "23.98Hz"])
 
@@ -1105,7 +1104,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(dell.refreshRateOptions.map(\.label), ["48–120Hz (Variable)", "120Hz", "60Hz"])
     }
 
-    func testRefreshRateOptionsDeduplicateBitDepthsWhilePreservingActiveModeAndVRR() {
+    func testRefreshRateOptionsDeduplicateBitDepthsWhilePreservingActiveModeAndVariableRate() {
         let modes: [RawDisplayMode] = [
             RawDisplayMode(
                 modeID: 200,
@@ -1115,7 +1114,7 @@ final class DisplayCoordinatorTests: XCTestCase {
                 pixelHeight: 2880,
                 refreshRate: 120.0,
                 bitsPerSample: 10,
-                isVRR: true,
+                isVariableRefreshRate: true,
                 minRefreshRate: 48.0
             ),
             RawDisplayMode(
@@ -1156,7 +1155,7 @@ final class DisplayCoordinatorTests: XCTestCase {
             )
         ]
 
-        // Active mode is 8-bit 60Hz (modeID 204) -> keeps 204 selected and prefers 8-bit 120Hz (202) while keeping VRR 200 distinct
+        // Active mode is 8-bit 60Hz (modeID 204) -> keeps 204 selected and prefers 8-bit 120Hz (202) while keeping Variable Refresh Rate 200 distinct
         let driver = FakeDisplayDriver(onlineDisplays: [
             RawDisplayInfo(displayID: 30, name: "DELL U2725QE", isBuiltIn: false, isMain: true, currentModeID: 204, modes: modes)
         ])
@@ -1177,7 +1176,7 @@ final class DisplayCoordinatorTests: XCTestCase {
                 pixelHeight: 2880,
                 refreshRate: 120.0,
                 bitsPerSample: 10,
-                isVRR: true,
+                isVariableRefreshRate: true,
                 minRefreshRate: 48.0
             ),
             RawDisplayMode(
@@ -1229,7 +1228,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first?.resolutionLabel, "2560x1440")
         XCTAssertEqual(coordinator.displays.first?.currentModeOption?.isHiDPI, true)
 
-        // Switch to 48-120Hz VRR
+        // Switch to 48-120Hz Variable Refresh Rate
         coordinator.selectRefreshRate(30, modeID: 300)
         XCTAssertEqual(driver.setModeHistory.count, 1)
         XCTAssertEqual(driver.setModeHistory.last?.modeID, 300)
@@ -1256,7 +1255,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first?.currentModeID, 302)
     }
 
-    func testFailedRefreshRateSwitchAndDisabledDisplayPreservePreviousState() {
+    func testFailedRefreshRateSwitchAndDisconnectedDisplayPreservePreviousState() {
         let modes: [RawDisplayMode] = [
             RawDisplayMode(modeID: 301, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0),
             RawDisplayMode(modeID: 302, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 60.0)
@@ -1849,7 +1848,7 @@ final class DisplayCoordinatorTests: XCTestCase {
                 pixelHeight: 2880,
                 refreshRate: 120.0,
                 bitsPerSample: 10,
-                isVRR: true,
+                isVariableRefreshRate: true,
                 minRefreshRate: 48.0
             ),
             RawDisplayMode(
@@ -1949,8 +1948,14 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(initialDisplay.availableModes.map(\.modeID), [13, 10, 12, 14, 17, 11, 15, 16])
 
         // Filter chips derive exclusively from safe >= 720p modes (no 24Hz or 5:4/75Hz from excluded modes)
-        XCTAssertEqual(initialDisplay.modeFilterState.availableOptions.aspectRatios, ["4:3", "16:9", "21:9"])
-        XCTAssertEqual(initialDisplay.modeFilterState.availableOptions.refreshRates, ["48–120Hz", "120Hz", "60Hz", "59.94Hz"])
+        XCTAssertEqual(
+            initialDisplay.modeFilterState.availableOptions.aspectRatios,
+            [AspectRatioFilterKey(4, 3), AspectRatioFilterKey(16, 9), AspectRatioFilterKey(21, 9)]
+        )
+        XCTAssertEqual(
+            initialDisplay.modeFilterState.availableOptions.refreshRates,
+            [.variable(min: 48, max: 120), .fixed(120), .fixed(60), .fixed(59.94)]
+        )
         XCTAssertEqual(initialDisplay.modeFilterState.availableOptions.colorDepths, [10, 8])
         XCTAssertEqual(initialDisplay.modeFilterState.availableOptions.scalingTiers, [.hiDPI, .loDPI])
 
@@ -1959,8 +1964,8 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             initialDisplay.modeFilterState.activeCriteria,
             DisplayModeFilterCriteria(
-                aspectRatios: ["16:9"],
-                refreshRates: ["120Hz"],
+                aspectRatios: [AspectRatioFilterKey(16, 9)],
+                refreshRates: [.fixed(120)],
                 colorDepths: [10],
                 scalingTiers: [.hiDPI]
             )
@@ -1970,7 +1975,10 @@ final class DisplayCoordinatorTests: XCTestCase {
         // Switching to Native Mode (LoDPI at 120Hz 10bit) keeps preferred HiDPI tier and native aspect ratio
         coordinator.selectDisplayMode(30, modeID: 13)
         XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.scalingTiers, [.hiDPI])
-        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.aspectRatios, ["16:9"])
+        XCTAssertEqual(
+            coordinator.displays.first?.modeFilterState.activeCriteria.aspectRatios,
+            [AspectRatioFilterKey(16, 9)]
+        )
         XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [12, 11])
 
         // Switching to a 59.94Hz 8bit mode updates active refresh rate & color depth while keeping 16:9 and HiDPI
@@ -1978,8 +1986,8 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             coordinator.displays.first?.modeFilterState.activeCriteria,
             DisplayModeFilterCriteria(
-                aspectRatios: ["16:9"],
-                refreshRates: ["59.94Hz"],
+                aspectRatios: [AspectRatioFilterKey(16, 9)],
+                refreshRates: [.fixed(59.94)],
                 colorDepths: [8],
                 scalingTiers: [.hiDPI]
             )
@@ -1991,8 +1999,8 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             coordinator.displays.first?.modeFilterState.activeCriteria,
             DisplayModeFilterCriteria(
-                aspectRatios: ["16:9"],
-                refreshRates: ["48–120Hz"],
+                aspectRatios: [AspectRatioFilterKey(16, 9)],
+                refreshRates: [.variable(min: 48, max: 120)],
                 colorDepths: [10],
                 scalingTiers: [.hiDPI]
             )
@@ -2103,13 +2111,13 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [101, 102])
 
         // Plain click selects only 60Hz within refresh rates while preserving 16:9, 10bit, HiDPI
-        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("60Hz"), multiSelect: false)
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate(.fixed(60)), multiSelect: false)
         XCTAssertEqual(display30()?.modeFilterState.isCustomized, true)
         XCTAssertEqual(
             display30()?.modeFilterState.activeCriteria,
             DisplayModeFilterCriteria(
-                aspectRatios: ["16:9"],
-                refreshRates: ["60Hz"],
+                aspectRatios: [AspectRatioFilterKey(16, 9)],
+                refreshRates: [.fixed(60)],
                 colorDepths: [10],
                 scalingTiers: [.hiDPI]
             )
@@ -2117,29 +2125,32 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [103])
 
         // Shift+click adds 120Hz alongside 60Hz
-        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("120Hz"), multiSelect: true)
-        XCTAssertEqual(display30()?.modeFilterState.activeCriteria.refreshRates, ["60Hz", "120Hz"])
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate(.fixed(120)), multiSelect: true)
+        XCTAssertEqual(display30()?.modeFilterState.activeCriteria.refreshRates, [.fixed(60), .fixed(120)])
         XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [101, 103, 102])
 
         // Shift+click adds 4:3 alongside 16:9, and LoDPI + 8bit
-        coordinator.selectDisplayModeFilterChip(30, chip: .aspectRatio("4:3"), multiSelect: true)
+        coordinator.selectDisplayModeFilterChip(30, chip: .aspectRatio(AspectRatioFilterKey(4, 3)), multiSelect: true)
         coordinator.selectDisplayModeFilterChip(30, chip: .scaling(.loDPI), multiSelect: true)
         coordinator.selectDisplayModeFilterChip(30, chip: .colorDepth(8), multiSelect: true)
         XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [100, 101, 103, 104, 102, 105])
 
         // Plain click on 120Hz solo-selects 120Hz in refresh rates while keeping multi-selected aspect, depth, and scaling
-        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("120Hz"), multiSelect: false)
-        XCTAssertEqual(display30()?.modeFilterState.activeCriteria.refreshRates, ["120Hz"])
-        XCTAssertEqual(display30()?.modeFilterState.activeCriteria.aspectRatios, ["16:9", "4:3"])
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate(.fixed(120)), multiSelect: false)
+        XCTAssertEqual(display30()?.modeFilterState.activeCriteria.refreshRates, [.fixed(120)])
+        XCTAssertEqual(
+            display30()?.modeFilterState.activeCriteria.aspectRatios,
+            [AspectRatioFilterKey(16, 9), AspectRatioFilterKey(4, 3)]
+        )
         XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [100, 101, 102])
 
         // Shift+clicking the sole selected chip in a group toggles it off, leaving that group unrestricted
-        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("120Hz"), multiSelect: true)
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate(.fixed(120)), multiSelect: true)
         XCTAssertEqual(display30()?.modeFilterState.activeCriteria.refreshRates, [])
         XCTAssertEqual(display30()?.filteredModes.map(\.modeID), [100, 101, 103, 104, 102, 105])
 
         // Disconnected Display ignores chip toggles
-        coordinator.selectDisplayModeFilterChip(20, chip: .refreshRate("60Hz"), multiSelect: false)
+        coordinator.selectDisplayModeFilterChip(20, chip: .refreshRate(.fixed(60)), multiSelect: false)
         XCTAssertNil(store.modeFilter(forKey: "display:20"))
     }
 
@@ -2245,8 +2256,8 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             coordinator.displays.first?.modeFilterState.activeCriteria,
             DisplayModeFilterCriteria(
-                aspectRatios: ["16:9"],
-                refreshRates: ["120Hz"],
+                aspectRatios: [AspectRatioFilterKey(16, 9)],
+                refreshRates: [.fixed(120)],
                 colorDepths: [10],
                 scalingTiers: [.hiDPI]
             )
@@ -2350,7 +2361,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         )
 
         // Customize DELL U2725QE to 60Hz + 8bit + LoDPI; keep Built-in Display uncustomized
-        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate("60Hz"), multiSelect: false)
+        coordinator.selectDisplayModeFilterChip(30, chip: .refreshRate(.fixed(60)), multiSelect: false)
         coordinator.selectDisplayModeFilterChip(30, chip: .colorDepth(8), multiSelect: false)
         coordinator.selectDisplayModeFilterChip(30, chip: .scaling(.loDPI), multiSelect: false)
 
@@ -2362,7 +2373,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         let builtInAfterSwitch = coordinator.displays.first(where: { $0.displayID == 1 })
         let dellAfterSwitch = coordinator.displays.first(where: { $0.displayID == 30 })
         XCTAssertEqual(builtInAfterSwitch?.modeFilterState.isCustomized, false)
-        XCTAssertEqual(builtInAfterSwitch?.modeFilterState.activeCriteria.refreshRates, ["59.94Hz"])
+        XCTAssertEqual(builtInAfterSwitch?.modeFilterState.activeCriteria.refreshRates, [.fixed(59.94)])
         XCTAssertEqual(dellAfterSwitch?.modeFilterState.isCustomized, true)
         XCTAssertEqual(dellAfterSwitch?.filteredModes.map(\.modeID), [32, 33])
 
@@ -2398,13 +2409,13 @@ final class DisplayCoordinatorTests: XCTestCase {
         let relaunchedBuiltIn = relaunchedCoordinator.displays.first(where: { $0.displayID == 1 })
         let relaunchedDell = relaunchedCoordinator.displays.first(where: { $0.displayID == 45 })
         XCTAssertEqual(relaunchedBuiltIn?.modeFilterState.isCustomized, false)
-        XCTAssertEqual(relaunchedBuiltIn?.modeFilterState.activeCriteria.refreshRates, ["120Hz"])
+        XCTAssertEqual(relaunchedBuiltIn?.modeFilterState.activeCriteria.refreshRates, [.fixed(120)])
         XCTAssertEqual(relaunchedDell?.modeFilterState.isCustomized, true)
         XCTAssertEqual(
             relaunchedDell?.modeFilterState.activeCriteria,
             DisplayModeFilterCriteria(
-                aspectRatios: ["16:9"],
-                refreshRates: ["60Hz"],
+                aspectRatios: [AspectRatioFilterKey(16, 9)],
+                refreshRates: [.fixed(60)],
                 colorDepths: [8],
                 scalingTiers: [.loDPI]
             )
@@ -2428,13 +2439,41 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertNil(store.modeFilter(forKey: "hardware:10AC:D0B3:00010002"))
 
         let custom = DisplayModeFilterCriteria(
-            aspectRatios: ["16:9", "16:10"],
-            refreshRates: ["48–120Hz", "59.94Hz"],
+            aspectRatios: [AspectRatioFilterKey(16, 9), AspectRatioFilterKey(16, 10)],
+            refreshRates: [.variable(min: 48, max: 120), .fixed(59.94)],
             colorDepths: [10],
             scalingTiers: [.hiDPI]
         )
         store.setModeFilter(custom, forKey: "hardware:10AC:D0B3:00010002")
         XCTAssertEqual(store.modeFilter(forKey: "hardware:10AC:D0B3:00010002"), custom)
+
+        // Legacy string-encoded criteria JSON decodes cleanly into typed AspectRatioFilterKey / RefreshRateFilterKey
+        let legacyJSON = """
+            {"aspectRatios":["16:9","16:10"],"refreshRates":["48–120Hz","59.94Hz"],\
+            "colorDepths":[10],"scalingTiers":["hiDPI"]}
+            """
+        defaults.set(try XCTUnwrap(legacyJSON.data(using: .utf8)), forKey: "OpenBetterDisplay.displayModeFilter.legacy")
+        XCTAssertEqual(store.modeFilter(forKey: "legacy"), custom)
+
+        // Built-in 15.4:10 aspect ratio and min-less Variable Refresh Rate (120Hz (Variable)) roundtrip and decode from legacy strings
+        let builtInCriteria = DisplayModeFilterCriteria(
+            aspectRatios: [AspectRatioFilterKey(widthTenths: 154, heightTenths: 100)],
+            refreshRates: [.variable(min: nil, max: 120), .fixed(120)],
+            colorDepths: [10],
+            scalingTiers: [.hiDPI]
+        )
+        store.setModeFilter(builtInCriteria, forKey: "builtin-custom")
+        XCTAssertEqual(store.modeFilter(forKey: "builtin-custom"), builtInCriteria)
+        XCTAssertEqual(AspectRatioFilterKey(widthTenths: 154, heightTenths: 100).label, "15.4:10")
+        XCTAssertEqual(RefreshRateFilterKey.variable(min: nil, max: 120).label, "120Hz (Variable)")
+        XCTAssertEqual(RefreshRateFilterKey.fixed(60000.0 / 1001.0), .fixed(59.94))
+
+        let builtInLegacyJSON = """
+            {"aspectRatios":["15.4:10"],"refreshRates":["120Hz (Variable)","120Hz"],\
+            "colorDepths":[10],"scalingTiers":["hiDPI"]}
+            """
+        defaults.set(try XCTUnwrap(builtInLegacyJSON.data(using: .utf8)), forKey: "OpenBetterDisplay.displayModeFilter.builtinLegacy")
+        XCTAssertEqual(store.modeFilter(forKey: "builtinLegacy"), builtInCriteria)
 
         // Show All (.unrestricted) must still persist distinctly from nil (uncustomized)
         store.setModeFilter(.unrestricted, forKey: "builtin")
@@ -2540,8 +2579,8 @@ final class DisplayCoordinatorTests: XCTestCase {
         let store = InMemoryDisplayModeFilterStore(initialFilters: [
             // Stale 120Hz selection on a 75Hz/60Hz-only display falls back to unrestricted refresh rate while keeping LoDPI
             "display:20": DisplayModeFilterCriteria(
-                aspectRatios: ["16:9"],
-                refreshRates: ["120Hz"],
+                aspectRatios: [AspectRatioFilterKey(16, 9)],
+                refreshRates: [.fixed(120)],
                 colorDepths: [8],
                 scalingTiers: [.loDPI]
             )
@@ -2572,12 +2611,12 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [2, 3])
 
         coordinator.selectDisplayMode(20, modeID: 1)
-        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.refreshRates, ["75Hz"])
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.refreshRates, [.fixed(75)])
         XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.scalingTiers, [.loDPI])
         XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [1])
     }
 
-    func testProMotionDerivesRangeChipAndSelectRefreshRateSyncsUncustomizedFilter() {
+    func testVariableRefreshRateDerivesRangeChipAndSelectRefreshRateSyncsUncustomizedFilter() {
         let builtInModes: [RawDisplayMode] = [
             RawDisplayMode(
                 modeID: 10,
@@ -2589,9 +2628,8 @@ final class DisplayCoordinatorTests: XCTestCase {
                 isNative: true,
                 bitsPerSample: 10,
                 isDefault: true,
-                isVRR: true,
-                isProMotion: true,
-                minRefreshRate: nil
+                isVariableRefreshRate: true,
+                minRefreshRate: 24.0
             ),
             RawDisplayMode(
                 modeID: 11,
@@ -2632,18 +2670,21 @@ final class DisplayCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(
             coordinator.displays.first?.modeFilterState.availableOptions.refreshRates,
-            ["24–120Hz", "120Hz", "59.94Hz"]
+            [.variable(min: 24, max: 120), .fixed(120), .fixed(59.94)]
         )
-        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.refreshRates, ["24–120Hz"])
+        XCTAssertEqual(
+            coordinator.displays.first?.modeFilterState.activeCriteria.refreshRates,
+            [.variable(min: 24, max: 120)]
+        )
         XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [10])
 
         // Switching via Refresh Rate picker updates uncustomized dynamic filter chip too
         coordinator.selectRefreshRate(1, modeID: 12)
-        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.refreshRates, ["59.94Hz"])
+        XCTAssertEqual(coordinator.displays.first?.modeFilterState.activeCriteria.refreshRates, [.fixed(59.94)])
         XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [12])
 
-        // Filtering explicitly by 24–120Hz selects the ProMotion mode even while 59.94Hz is active
-        coordinator.selectDisplayModeFilterChip(1, chip: .refreshRate("24–120Hz"), multiSelect: false)
+        // Filtering explicitly by 24–120Hz selects the Variable Refresh Rate mode even while 59.94Hz is active
+        coordinator.selectDisplayModeFilterChip(1, chip: .refreshRate(.variable(min: 24, max: 120)), multiSelect: false)
         XCTAssertEqual(coordinator.displays.first?.filteredModes.map(\.modeID), [10])
     }
 
@@ -2782,7 +2823,7 @@ final class DisplayCoordinatorTests: XCTestCase {
         coordinator.assignFavoriteMode(30, modeID: 102, slot: 1)
         coordinator.assignFavoriteMode(30, modeID: 103, slot: 2)
 
-        // Switching to empty slot or disabled display is ignored
+        // Switching to empty slot or Disconnected Display is ignored
         coordinator.selectFavoriteMode(30, slot: 5)
         coordinator.selectFavoriteMode(40, slot: 1)
         XCTAssertTrue(driver.setModeHistory.isEmpty)
@@ -2894,7 +2935,247 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertEqual(updatedExternal?.favoriteMode(forSlot: 2)?.resolvedMode?.modeID, 603)
     }
 
-    func testUserDefaultsFavoriteModesStorePersistsAndClearsSlotsPerDisplayKey() {
+    func testFavoriteModeResolvesVariableRefreshRateAcrossModeIDShiftAndProvidesVariableFallbackOption() {
+        let initialModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 101,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVariableRefreshRate: true,
+                minRefreshRate: 48.0
+            ),
+            RawDisplayMode(
+                modeID: 102,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVariableRefreshRate: false
+            ),
+            RawDisplayMode(
+                modeID: 103,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVariableRefreshRate: true,
+                minRefreshRate: 24.0
+            )
+        ]
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 30,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x10AC,
+                modelID: 0xD0F1,
+                serialNumber: 0x11223344,
+                currentModeID: 102,
+                modes: initialModes
+            )
+        ])
+
+        let favoriteStore = InMemoryFavoriteModesStore()
+        let coordinator = DisplayCoordinator(driver: driver, favoriteModesStore: favoriteStore)
+        coordinator.assignFavoriteMode(30, modeID: 101, slot: 1)
+        coordinator.assignFavoriteMode(30, modeID: 102, slot: 2)
+
+        // Reconnect with shifted modeIDs where 101 is now fixed 120Hz and 48–120Hz moved to 501
+        let shiftedModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 101,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVariableRefreshRate: false
+            ),
+            RawDisplayMode(
+                modeID: 503,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVariableRefreshRate: true,
+                minRefreshRate: 24.0
+            ),
+            RawDisplayMode(
+                modeID: 501,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 5120,
+                pixelHeight: 2880,
+                refreshRate: 120.0,
+                bitsPerSample: 10,
+                isVariableRefreshRate: true,
+                minRefreshRate: 48.0
+            )
+        ]
+
+        let relaunchedDriver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 35,
+                name: "DELL U2725QE",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x10AC,
+                modelID: 0xD0F1,
+                serialNumber: 0x11223344,
+                currentModeID: 101,
+                modes: shiftedModes
+            )
+        ])
+        let relaunchedCoordinator = DisplayCoordinator(driver: relaunchedDriver, favoriteModesStore: favoriteStore)
+        let reconnected = relaunchedCoordinator.displays.first
+
+        XCTAssertEqual(reconnected?.favoriteMode(forSlot: 1)?.resolvedMode?.modeID, 501)
+        XCTAssertEqual(reconnected?.favoriteMode(forSlot: 1)?.resolvedMode?.isVariableRefreshRate, true)
+        XCTAssertEqual(reconnected?.favoriteMode(forSlot: 1)?.resolvedMode?.refreshRateLabel, "48–120Hz")
+        XCTAssertEqual(reconnected?.favoriteMode(forSlot: 2)?.resolvedMode?.modeID, 101)
+        XCTAssertEqual(reconnected?.favoriteMode(forSlot: 2)?.resolvedMode?.isVariableRefreshRate, false)
+
+        // When 48–120Hz disappears temporarily, offline fallbackModeOption retains Variable Refresh Rate label
+        relaunchedDriver.onlineDisplays[0].modes.removeAll(where: { $0.modeID == 501 })
+        relaunchedCoordinator.handleDisplayReconfiguration()
+        let unavailableSlot = relaunchedCoordinator.displays.first?.favoriteMode(forSlot: 1)
+        XCTAssertNil(unavailableSlot?.resolvedMode)
+        XCTAssertEqual(unavailableSlot?.record.fallbackModeOption.isVariableRefreshRate, true)
+        XCTAssertEqual(unavailableSlot?.record.fallbackModeOption.minRefreshRate, 48.0)
+        XCTAssertEqual(unavailableSlot?.record.fallbackModeOption.refreshRateLabel, "48–120Hz")
+    }
+
+    func testSerialLessMonitorWithVendorAndModelPersistsFavoritesAndFiltersAcrossDisplayIDReassignment() {
+        let modes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 101,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 60.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 102,
+                width: 2560,
+                height: 1440,
+                pixelWidth: 2560,
+                pixelHeight: 1440,
+                refreshRate: 60.0,
+                bitsPerSample: 8
+            )
+        ]
+
+        let favoriteStore = InMemoryFavoriteModesStore()
+        let filterStore = InMemoryDisplayModeFilterStore()
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 20,
+                name: "LG HDR 4K",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x1E6D,
+                modelID: 0x5B11,
+                serialNumber: 0,
+                currentModeID: 101,
+                modes: modes
+            )
+        ])
+
+        let coordinator = DisplayCoordinator(
+            driver: driver,
+            brightnessStore: InMemoryBrightnessStore(),
+            favoriteModesStore: favoriteStore,
+            modeFilterStore: filterStore
+        )
+        coordinator.assignFavoriteMode(20, modeID: 102, slot: 1)
+        coordinator.showAllDisplayModes(20)
+
+        // Reconnect / relaunch on a new displayID (20 -> 45) with serialNumber still 0
+        let relaunchedDriver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 45,
+                name: "LG HDR 4K",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x1E6D,
+                modelID: 0x5B11,
+                serialNumber: 0,
+                currentModeID: 101,
+                modes: modes
+            )
+        ])
+        let relaunchedCoordinator = DisplayCoordinator(
+            driver: relaunchedDriver,
+            brightnessStore: InMemoryBrightnessStore(),
+            favoriteModesStore: favoriteStore,
+            modeFilterStore: filterStore
+        )
+
+        let reconnected = relaunchedCoordinator.displays.first
+        XCTAssertEqual(reconnected?.favoriteMode(forSlot: 1)?.resolvedMode?.modeID, 102)
+        XCTAssertEqual(reconnected?.modeFilterState.isShowingAll, true)
+        XCTAssertEqual(reconnected?.filteredModes.map(\.modeID), [102, 101])
+
+        // Two simultaneously connected serial-less monitors sharing vendor/model disambiguate by displayID
+        let dualDriver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 20,
+                name: "LG HDR 4K (1)",
+                isBuiltIn: false,
+                isMain: true,
+                vendorID: 0x1E6D,
+                modelID: 0x5B11,
+                serialNumber: 0,
+                currentModeID: 101,
+                modes: modes
+            ),
+            RawDisplayInfo(
+                displayID: 21,
+                name: "LG HDR 4K (2)",
+                isBuiltIn: false,
+                isMain: false,
+                vendorID: 0x1E6D,
+                modelID: 0x5B11,
+                serialNumber: 0,
+                currentModeID: 101,
+                modes: modes
+            )
+        ])
+        let dualCoordinator = DisplayCoordinator(
+            driver: dualDriver,
+            brightnessStore: InMemoryBrightnessStore(),
+            favoriteModesStore: InMemoryFavoriteModesStore(),
+            modeFilterStore: InMemoryDisplayModeFilterStore()
+        )
+        dualCoordinator.assignFavoriteMode(20, modeID: 102, slot: 1)
+        dualCoordinator.showAllDisplayModes(20)
+
+        let firstDual = dualCoordinator.displays.first(where: { $0.displayID == 20 })
+        let secondDual = dualCoordinator.displays.first(where: { $0.displayID == 21 })
+        XCTAssertEqual(firstDual?.favoriteMode(forSlot: 1)?.resolvedMode?.modeID, 102)
+        XCTAssertEqual(firstDual?.modeFilterState.isShowingAll, true)
+        XCTAssertTrue(secondDual?.favoriteModes.isEmpty ?? false)
+        XCTAssertEqual(secondDual?.modeFilterState.isCustomized, false)
+    }
+
+    func testUserDefaultsFavoriteModesStorePersistsAndClearsSlotsPerDisplayKey() throws {
         let suiteName = "OpenBetterDisplayTests.Favorites.\(UUID().uuidString)"
         let userDefaults = UserDefaults(suiteName: suiteName)!
         defer { userDefaults.removePersistentDomain(forName: suiteName) }
@@ -2909,7 +3190,9 @@ final class DisplayCoordinatorTests: XCTestCase {
             pixelWidth: 5120,
             pixelHeight: 2880,
             refreshRate: 120.0,
-            bitsPerSample: 10
+            bitsPerSample: 10,
+            isVariableRefreshRate: true,
+            minRefreshRate: 48.0
         )
         let slot5 = FavoriteModeRecord(
             modeID: 103,
@@ -2926,6 +3209,30 @@ final class DisplayCoordinatorTests: XCTestCase {
         XCTAssertTrue(reloadedStore.favoriteModes(forKey: "builtin").isEmpty)
         let loaded = reloadedStore.favoriteModes(forKey: "hardware:10AC:D0F1:11223344")
         XCTAssertEqual(loaded, [1: slot1, 5: slot5])
+
+        // Legacy persisted JSON without Variable Refresh Rate fields decodes cleanly with false / nil defaults
+        let legacyJSON = """
+            {"2":{"modeID":77,"width":1920,"height":1080,"pixelWidth":3840,\
+            "pixelHeight":2160,"refreshRate":60,"bitsPerSample":8}}
+            """
+        userDefaults.set(try XCTUnwrap(legacyJSON.data(using: .utf8)), forKey: "OpenBetterDisplay.favoriteModes.legacyDisplay")
+        let legacyLoaded = reloadedStore.favoriteModes(forKey: "legacyDisplay")
+        XCTAssertEqual(
+            legacyLoaded,
+            [
+                2: FavoriteModeRecord(
+                    modeID: 77,
+                    width: 1920,
+                    height: 1080,
+                    pixelWidth: 3840,
+                    pixelHeight: 2160,
+                    refreshRate: 60.0,
+                    bitsPerSample: 8,
+                    isVariableRefreshRate: false,
+                    minRefreshRate: nil
+                )
+            ]
+        )
 
         reloadedStore.setFavoriteModes([:], forKey: "hardware:10AC:D0F1:11223344")
         XCTAssertTrue(store.favoriteModes(forKey: "hardware:10AC:D0F1:11223344").isEmpty)

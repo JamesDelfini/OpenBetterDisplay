@@ -59,20 +59,17 @@ public struct BrightnessKeyEvent: Equatable, Sendable {
     public var direction: BrightnessKeyDirection
     public var source: BrightnessKeySource
     public var isFine: Bool
-    public var isRepeat: Bool
     public var pointerLocation: CGPoint?
 
     public init(
         direction: BrightnessKeyDirection,
         source: BrightnessKeySource,
         isFine: Bool = false,
-        isRepeat: Bool = false,
         pointerLocation: CGPoint? = nil
     ) {
         self.direction = direction
         self.source = source
         self.isFine = isFine
-        self.isRepeat = isRepeat
         self.pointerLocation = pointerLocation
     }
 }
@@ -132,30 +129,22 @@ public protocol HotkeyPreferencesPersistence: Sendable {
     func savePreferences(_ preferences: HotkeyPreferences)
 }
 
-public final class UserDefaultsHotkeyPreferencesStore: HotkeyPreferencesPersistence, @unchecked Sendable {
-    private let userDefaults: UserDefaults
-    private let storageKey: String
+public final class UserDefaultsHotkeyPreferencesStore: HotkeyPreferencesPersistence, Sendable {
+    private let jsonStore: UserDefaultsJSONStore
 
     public init(
         userDefaults: UserDefaults = .standard,
         storageKey: String = "OpenBetterDisplay.hotkeyPreferences"
     ) {
-        self.userDefaults = userDefaults
-        self.storageKey = storageKey
+        self.jsonStore = UserDefaultsJSONStore(userDefaults: userDefaults, keyPrefix: storageKey)
     }
 
     public func loadPreferences() -> HotkeyPreferences? {
-        guard let data = userDefaults.data(forKey: storageKey) else {
-            return nil
-        }
-        return try? JSONDecoder().decode(HotkeyPreferences.self, from: data)
+        jsonStore.load()
     }
 
     public func savePreferences(_ preferences: HotkeyPreferences) {
-        guard let data = try? JSONEncoder().encode(preferences) else {
-            return
-        }
-        userDefaults.set(data, forKey: storageKey)
+        jsonStore.save(preferences)
     }
 }
 

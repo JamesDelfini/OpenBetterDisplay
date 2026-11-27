@@ -3,7 +3,6 @@ import SwiftUI
 
 public struct HotkeysSectionView: View {
     @ObservedObject var coordinator: DisplayCoordinator
-    @State private var isHeaderHovering = false
 
     public init(coordinator: DisplayCoordinator) {
         self.coordinator = coordinator
@@ -22,80 +21,49 @@ public struct HotkeysSectionView: View {
     }
 
     private var needsAccessibilityWarning: Bool {
-        preferences.isMediaKeysEnabled && !checkerStatus.isAccessibilityTrusted
+        preferences.isMediaKeysEnabled
+            && (!checkerStatus.isAccessibilityTrusted || !checkerStatus.isMediaKeyCaptureActive)
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            headerButton
-
-            if isExpanded {
-                Divider()
-                    .overlay(Color.white.opacity(0.09))
-                    .padding(.horizontal, 8)
-
-                expandedContent
-            }
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(isExpanded ? 0.08 : (isHeaderHovering ? 0.10 : 0.06)))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(
-                            Color.white.opacity(isExpanded ? 0.15 : 0.10),
-                            lineWidth: 0.8
-                        )
-                )
-        )
-    }
-
-    private var headerButton: some View {
-        Button {
+        CollapsibleSectionCard(
+            isExpanded: isExpanded,
+            headerSpacing: 10,
+            headerHorizontalPadding: 8,
+            headerVerticalPadding: 6,
+            helpText: "Configure Brightness Hotkeys, Target Display, and Fn-key checker",
+            accessibilityLabel: "Hotkeys, Target Display \(preferences.targetMode.label)"
+        ) {
             coordinator.toggleExpandedSection(.hotkeys)
-        } label: {
-            HStack(spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(0.10))
-                        .frame(width: 22, height: 22)
-                    Image(systemName: "keyboard")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.88))
-                }
-
-                Text("Hotkeys")
-                    .font(.system(size: 13.5, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.92))
-
-                Spacer(minLength: 6)
-
-                if needsAccessibilityWarning {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(Color.orange.opacity(0.92))
-                        .help("Accessibility permission needed for ☀️- / ☀️+ on external displays")
-                }
-
-                Text(preferences.targetMode.compactLabel)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.62))
-
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .frame(width: 10)
+        } header: {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.10))
+                    .frame(width: 22, height: 22)
+                Image(systemName: "keyboard")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.88))
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
+
+            Text("Hotkeys")
+                .font(.system(size: 13.5, weight: .regular))
+                .foregroundStyle(.white.opacity(0.92))
+
+            Spacer(minLength: 6)
+
+            if needsAccessibilityWarning {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Color.orange.opacity(0.92))
+                    .help(accessibilityWarningHelpText)
+            }
+
+            Text(preferences.targetMode.compactLabel)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.62))
+        } content: {
+            expandedContent
         }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            isHeaderHovering = hovering
-        }
-        .help("Configure Brightness Hotkeys, Target Display, and Fn-key checker")
-        .accessibilityLabel("Hotkeys, Target Display \(preferences.targetMode.label)")
     }
 
     private var expandedContent: some View {
@@ -185,13 +153,17 @@ public struct HotkeysSectionView: View {
             }
 
             CheckerCardView(
-                iconName: checkerStatus.isAccessibilityTrusted ? "checkmark.shield.fill" : "exclamationmark.triangle.fill",
-                iconColor: checkerStatus.isAccessibilityTrusted ? Color.green.opacity(0.90) : Color.orange.opacity(0.92),
-                title: checkerStatus.isAccessibilityTrusted ? "Accessibility: Granted" : "Accessibility: Not Granted",
+                iconName: accessibilityIconName,
+                iconColor: accessibilityIconColor,
+                title: accessibilityTitle,
                 detail: accessibilityDetail,
-                buttonTitle: checkerStatus.isAccessibilityTrusted ? nil : "Enable Accessibility…"
+                buttonTitle: accessibilityButtonTitle
             ) {
-                coordinator.requestAccessibilityPermission()
+                if !checkerStatus.isAccessibilityTrusted {
+                    coordinator.requestAccessibilityPermission()
+                } else {
+                    coordinator.refreshKeyboardCheckerStatus()
+                }
             }
         }
     }
@@ -240,13 +212,57 @@ public struct HotkeysSectionView: View {
         }
     }
 
-    private var accessibilityDetail: String {
-        if checkerStatus.isAccessibilityTrusted {
-            return preferences.isMediaKeysEnabled
-                ? "☀️- / ☀️+ active for external displays."
-                : "Granted. Enable Media Keys for ☀️- / ☀️+."
+    private var accessibilityWarningHelpText: String {
+        if !checkerStatus.isAccessibilityTrusted {
+            return "Accessibility permission needed for ☀️- / ☀️+ on external displays"
         }
-        return "Required to intercept ☀️- / ☀️+ on external displays."
+        return "Media-key event capture failed to attach for ☀️- / ☀️+ on external displays"
+    }
+
+    private var isAccessibilityCaptureHealthy: Bool {
+        checkerStatus.isAccessibilityTrusted
+            && (!preferences.isMediaKeysEnabled || checkerStatus.isMediaKeyCaptureActive)
+    }
+
+    private var accessibilityIconName: String {
+        isAccessibilityCaptureHealthy ? "checkmark.shield.fill" : "exclamationmark.triangle.fill"
+    }
+
+    private var accessibilityIconColor: Color {
+        isAccessibilityCaptureHealthy ? Color.green.opacity(0.90) : Color.orange.opacity(0.92)
+    }
+
+    private var accessibilityTitle: String {
+        if !checkerStatus.isAccessibilityTrusted {
+            return "Accessibility: Not Granted"
+        }
+        if preferences.isMediaKeysEnabled, !checkerStatus.isMediaKeyCaptureActive {
+            return "Accessibility: Granted (Capture Inactive)"
+        }
+        return "Accessibility: Granted"
+    }
+
+    private var accessibilityDetail: String {
+        if !checkerStatus.isAccessibilityTrusted {
+            return "Required to intercept ☀️- / ☀️+ on external displays."
+        }
+        if !preferences.isMediaKeysEnabled {
+            return "Granted. Enable Media Keys for ☀️- / ☀️+."
+        }
+        if checkerStatus.isMediaKeyCaptureActive {
+            return "☀️- / ☀️+ active for external displays."
+        }
+        return "Accessibility is granted, but ☀️- / ☀️+ event capture failed to attach."
+    }
+
+    private var accessibilityButtonTitle: String? {
+        if !checkerStatus.isAccessibilityTrusted {
+            return "Enable Accessibility…"
+        }
+        if preferences.isMediaKeysEnabled, !checkerStatus.isMediaKeyCaptureActive {
+            return "Retry Capture"
+        }
+        return nil
     }
 }
 
@@ -274,18 +290,7 @@ private struct TargetModeRowView: View {
             }
             .padding(.horizontal, 5)
             .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(
-                        isSelected
-                            ? Color.accentColor.opacity(isHovering ? 0.34 : 0.24)
-                            : Color.white.opacity(isHovering ? 0.10 : 0.0)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(isSelected ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 0.7)
-                    )
-            )
+            .selectableRowBackground(isSelected: isSelected, isHovering: isHovering)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

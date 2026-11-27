@@ -5,24 +5,20 @@ public protocol FavoriteModesPersistence: Sendable {
     func setFavoriteModes(_ slots: [Int: FavoriteModeRecord], forKey key: String)
 }
 
-public final class UserDefaultsFavoriteModesStore: FavoriteModesPersistence, @unchecked Sendable {
+public final class UserDefaultsFavoriteModesStore: FavoriteModesPersistence, Sendable {
     public static let validSlotRange = 1...5
 
-    private let userDefaults: UserDefaults
-    private let keyPrefix: String
+    private let jsonStore: UserDefaultsJSONStore
 
     public init(
         userDefaults: UserDefaults = .standard,
         keyPrefix: String = "OpenBetterDisplay.favoriteModes."
     ) {
-        self.userDefaults = userDefaults
-        self.keyPrefix = keyPrefix
+        self.jsonStore = UserDefaultsJSONStore(userDefaults: userDefaults, keyPrefix: keyPrefix)
     }
 
     public func favoriteModes(forKey key: String) -> [Int: FavoriteModeRecord] {
-        guard let data = userDefaults.data(forKey: storageKey(for: key)),
-            let decoded = try? JSONDecoder().decode([String: FavoriteModeRecord].self, from: data)
-        else {
+        guard let decoded = jsonStore.load([String: FavoriteModeRecord].self, forKey: key) else {
             return [:]
         }
 
@@ -41,18 +37,6 @@ public final class UserDefaultsFavoriteModesStore: FavoriteModesPersistence, @un
             encodedPayload[String(slot)] = record
         }
 
-        let storageKey = storageKey(for: key)
-        if encodedPayload.isEmpty {
-            userDefaults.removeObject(forKey: storageKey)
-            return
-        }
-
-        if let data = try? JSONEncoder().encode(encodedPayload) {
-            userDefaults.set(data, forKey: storageKey)
-        }
-    }
-
-    private func storageKey(for key: String) -> String {
-        keyPrefix + key
+        jsonStore.save(encodedPayload.isEmpty ? nil : encodedPayload, forKey: key)
     }
 }

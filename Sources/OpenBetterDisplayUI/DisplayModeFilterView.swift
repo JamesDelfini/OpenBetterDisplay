@@ -23,9 +23,9 @@ public struct DisplayModeFilterView: View {
                 chipGroupRow(title: "Aspect") {
                     ForEach(filterState.availableOptions.aspectRatios, id: \.self) { ratio in
                         chipButton(
-                            label: ratio,
+                            label: ratio.label,
                             chip: .aspectRatio(ratio),
-                            accessibilityLabel: "Aspect ratio \(ratio)"
+                            accessibilityLabel: "Aspect ratio \(ratio.label)"
                         )
                     }
                 }
@@ -35,9 +35,9 @@ public struct DisplayModeFilterView: View {
                 chipGroupRow(title: "Rate") {
                     ForEach(filterState.availableOptions.refreshRates, id: \.self) { rate in
                         chipButton(
-                            label: rate,
+                            label: rate.label,
                             chip: .refreshRate(rate),
-                            accessibilityLabel: "Refresh rate \(rate)"
+                            accessibilityLabel: "Refresh rate \(rate.label)"
                         )
                     }
                 }

@@ -12,7 +12,7 @@ final class FakeBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     var pointerLocation: CGPoint?
     var accessibilityPermissionRequestCount = 0
     var openKeyboardSettingsCount = 0
-    var shownHUDBatches: [[BrightnessHUDUpdate]] = []
+    var shownHUDUpdates: [[BrightnessHUDUpdate]] = []
     var stopCount = 0
 
     init(
@@ -47,7 +47,7 @@ final class FakeBrightnessHotkeyGateway: BrightnessHotkeyGateway {
     }
 
     func showBrightnessHUD(_ updates: [BrightnessHUDUpdate]) {
-        shownHUDBatches.append(updates)
+        shownHUDUpdates.append(updates)
     }
 
     func stop() {

@@ -118,7 +118,7 @@ public struct DisplayModeFavoritesView: View {
 
     @ViewBuilder
     private func favoriteRow(for slotEntry: FavoriteModeSlot) -> some View {
-        let modeOption = slotEntry.resolvedMode ?? fallbackOption(for: slotEntry.record)
+        let modeOption = slotEntry.resolvedMode ?? slotEntry.record.fallbackModeOption
         let isSelected = slotEntry.resolvedMode?.modeID == display.currentModeID
 
         DisplayModeRowView(
@@ -136,20 +136,6 @@ public struct DisplayModeFavoritesView: View {
             modeID: modeOption.modeID,
             canAssign: slotEntry.isAvailable,
             coordinator: coordinator
-        )
-    }
-
-    private func fallbackOption(for record: FavoriteModeRecord) -> DisplayModeOption {
-        DisplayModeFilter.makeModeOption(
-            mode: RawDisplayMode(
-                modeID: record.modeID,
-                width: record.width,
-                height: record.height,
-                pixelWidth: record.pixelWidth,
-                pixelHeight: record.pixelHeight,
-                refreshRate: record.refreshRate,
-                bitsPerSample: record.bitsPerSample
-            )
         )
     }
 }

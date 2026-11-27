@@ -25,6 +25,7 @@ public enum SkyLightDisplayModeDescription {
     public static let byteLength: Int32 = 212
     public static let displayModeDefaultFlag: UInt32 = 0x0000_0004
     public static let displayModeStretchedFlag: UInt32 = 0x0000_0800
+    public static let displayModeValidForMirroringFlag: UInt32 = 0x0020_0000
     public static let displayModeNativeFlag: UInt32 = 0x0200_0000
     private static let displayModeValidAndSafeMask: UInt32 = 0x0000_0003
     static let displayModeUnsafeFlag: UInt32 = 0x4000_0000
@@ -81,6 +82,7 @@ public enum SkyLightDisplayModeDescription {
         let isDefault = (combinedFlags & displayModeDefaultFlag) != 0
         let isStretched = (combinedFlags & displayModeStretchedFlag) != 0
         let isNative = (combinedFlags & displayModeNativeFlag) != 0
+        let isMirroringOnly = (combinedFlags & displayModeValidForMirroringFlag) != 0
         let isUsableForDesktopGUI =
             (ioFlags & displayModeValidAndSafeMask) == displayModeValidAndSafeMask
             && (combinedFlags & displayModeUnsafeFlag) == 0
@@ -100,7 +102,8 @@ public enum SkyLightDisplayModeDescription {
             isNative: isNative,
             bitsPerSample: bitsPerSample,
             isDefault: isDefault,
-            isStretched: isStretched
+            isStretched: isStretched,
+            isMirroringOnly: isMirroringOnly
         )
     }
 
@@ -417,12 +420,28 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         return .softwareGamma
     }
 
+    public static func shouldFallbackToSkyLightModeConfiguration(
+        catalogModeCount: Int,
+        matchedCatalogMode: Bool
+    ) -> Bool {
+        matchedCatalogMode || catalogModeCount == 0
+    }
+
     public func setDisplayMode(_ displayID: UInt32, modeID: Int32) throws {
         let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
-        let modes = (CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode]) ?? []
+        var modes = (CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode]) ?? []
+        if let currentMode = CGDisplayCopyDisplayMode(displayID),
+            !modes.contains(where: { $0.ioDisplayModeID == currentMode.ioDisplayModeID })
+        {
+            modes.append(currentMode)
+        }
         let targetMode = modes.first(where: { $0.ioDisplayModeID == modeID })
+        let allowSkyLightFallback = Self.shouldFallbackToSkyLightModeConfiguration(
+            catalogModeCount: modes.count,
+            matchedCatalogMode: targetMode != nil
+        )
 
-        guard targetMode != nil || cgsConfigureDisplayMode != nil else {
+        guard targetMode != nil || (allowSkyLightFallback && cgsConfigureDisplayMode != nil) else {
             throw DisplayDriverError.modeNotFound(modeID)
         }
 
@@ -431,7 +450,7 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             if let targetMode {
                 configErr = CGConfigureDisplayWithDisplayMode(configRef, displayID, targetMode, nil)
             }
-            if configErr != .success, let cgsConfigureDisplayMode {
+            if configErr != .success, allowSkyLightFallback, let cgsConfigureDisplayMode {
                 configErr = cgsConfigureDisplayMode(configRef, displayID, modeID)
             }
             guard configErr == .success else {
@@ -644,6 +663,10 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
         cgModes: [RawDisplayMode],
         skyLightModes: [RawDisplayMode]
     ) -> [RawDisplayMode] {
+        guard !cgModes.isEmpty else {
+            return skyLightModes.filter { !$0.isMirroringOnly }
+        }
+
         var mergedByID: [Int32: RawDisplayMode] = [:]
         var orderedIDs: [Int32] = []
 
@@ -654,30 +677,31 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
             mergedByID[mode.modeID] = mode
         }
 
+        // Enrich macOS-exposed CGDisplayModes with SkyLight depth/VRR/flag metadata,
+        // without injecting unexposed SkyLight mirroring or out-of-spec timings.
         for skyLightMode in skyLightModes {
-            if var existing = mergedByID[skyLightMode.modeID] {
-                if skyLightMode.bitsPerSample > 0 {
-                    existing.bitsPerSample = skyLightMode.bitsPerSample
-                }
-                existing.isDefault = existing.isDefault || skyLightMode.isDefault
-                existing.isNative = existing.isNative || skyLightMode.isNative
-                existing.isStretched = existing.isStretched || skyLightMode.isStretched
-                existing.isUsableForDesktopGUI =
-                    existing.isUsableForDesktopGUI
-                    && skyLightMode.isUsableForDesktopGUI
-                    && !existing.isStretched
-                if existing.refreshRate <= 0, skyLightMode.refreshRate > 0 {
-                    existing.refreshRate = skyLightMode.refreshRate
-                }
-                existing.isVariableRefreshRate = existing.isVariableRefreshRate || skyLightMode.isVariableRefreshRate
-                if let minRefreshRate = skyLightMode.minRefreshRate {
-                    existing.minRefreshRate = minRefreshRate
-                }
-                mergedByID[skyLightMode.modeID] = existing
-            } else {
-                orderedIDs.append(skyLightMode.modeID)
-                mergedByID[skyLightMode.modeID] = skyLightMode
+            guard var existing = mergedByID[skyLightMode.modeID] else {
+                continue
             }
+            if skyLightMode.bitsPerSample > 0 {
+                existing.bitsPerSample = skyLightMode.bitsPerSample
+            }
+            existing.isDefault = existing.isDefault || skyLightMode.isDefault
+            existing.isNative = existing.isNative || skyLightMode.isNative
+            existing.isStretched = existing.isStretched || skyLightMode.isStretched
+            existing.isMirroringOnly = existing.isMirroringOnly || skyLightMode.isMirroringOnly
+            existing.isUsableForDesktopGUI =
+                existing.isUsableForDesktopGUI
+                && skyLightMode.isUsableForDesktopGUI
+                && !existing.isStretched
+            if existing.refreshRate <= 0, skyLightMode.refreshRate > 0 {
+                existing.refreshRate = skyLightMode.refreshRate
+            }
+            existing.isVariableRefreshRate = existing.isVariableRefreshRate || skyLightMode.isVariableRefreshRate
+            if let minRefreshRate = skyLightMode.minRefreshRate {
+                existing.minRefreshRate = minRefreshRate
+            }
+            mergedByID[skyLightMode.modeID] = existing
         }
 
         return orderedIDs.compactMap { mergedByID[$0] }
@@ -754,7 +778,8 @@ public final class MacOSDisplayDriver: DisplayDriver, @unchecked Sendable {
                 isNative: (ioFlags & SkyLightDisplayModeDescription.displayModeNativeFlag) != 0,
                 bitsPerSample: 8,
                 isDefault: (ioFlags & SkyLightDisplayModeDescription.displayModeDefaultFlag) != 0,
-                isStretched: isStretched
+                isStretched: isStretched,
+                isMirroringOnly: (ioFlags & SkyLightDisplayModeDescription.displayModeValidForMirroringFlag) != 0
             )
         }
 

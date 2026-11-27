@@ -3276,6 +3276,204 @@ final class DisplayCoordinatorTests: XCTestCase {
         coordinator.setDisplayEnabled(1, enabled: false)
         XCTAssertNil(coordinator.managingFavoritesDisplayID)
     }
+
+    func testExternalMonitorExcludesUnexposed75HzMirroringRateWhileKeepingCompatibleAndBuiltInProMotionRates() {
+        let p2217hCGModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 32,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 60.0,
+                isUsableForDesktopGUI: true,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 33,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 50.0,
+                isUsableForDesktopGUI: true,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 49,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 60.0,
+                isUsableForDesktopGUI: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 21,
+                width: 1280,
+                height: 1024,
+                pixelWidth: 1280,
+                pixelHeight: 1024,
+                refreshRate: 75.0,
+                isUsableForDesktopGUI: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 22,
+                width: 1280,
+                height: 1024,
+                pixelWidth: 1280,
+                pixelHeight: 1024,
+                refreshRate: 60.0,
+                isUsableForDesktopGUI: true,
+                bitsPerSample: 10
+            )
+        ]
+        let unexposedSkyLightModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 48,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 75.0,
+                isUsableForDesktopGUI: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 50,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 50.0,
+                isUsableForDesktopGUI: true,
+                bitsPerSample: 10
+            )
+        ]
+        let p2217hSkyLightModes = p2217hCGModes + unexposedSkyLightModes
+
+        let builtInProMotionModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 54,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 120.0,
+                isNative: true,
+                bitsPerSample: 10,
+                isDefault: true,
+                isVariableRefreshRate: true,
+                minRefreshRate: 24.0
+            ),
+            RawDisplayMode(
+                modeID: 55,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 60.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 56,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 59.94,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 57,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 50.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 58,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 48.0,
+                isNative: true,
+                bitsPerSample: 10
+            ),
+            RawDisplayMode(
+                modeID: 59,
+                width: 1512,
+                height: 982,
+                pixelWidth: 3024,
+                pixelHeight: 1964,
+                refreshRate: 47.95,
+                isNative: true,
+                bitsPerSample: 10
+            )
+        ]
+
+        let mergedP2217H = MacOSDisplayDriver.mergeDisplayModes(
+            cgModes: p2217hCGModes,
+            skyLightModes: p2217hSkyLightModes
+        )
+        let mergedBuiltIn = MacOSDisplayDriver.mergeDisplayModes(
+            cgModes: builtInProMotionModes,
+            skyLightModes: builtInProMotionModes
+        )
+
+        let driver = FakeDisplayDriver(onlineDisplays: [
+            RawDisplayInfo(
+                displayID: 1,
+                name: "Built-in Display",
+                isBuiltIn: true,
+                isMain: true,
+                currentModeID: 54,
+                modes: mergedBuiltIn
+            ),
+            RawDisplayInfo(
+                displayID: 3,
+                name: "DELL P2217H",
+                isBuiltIn: false,
+                isMain: false,
+                currentModeID: 49,
+                modes: mergedP2217H
+            )
+        ])
+
+        let coordinator = DisplayCoordinator(driver: driver)
+        let builtIn = coordinator.displays.first(where: { $0.displayID == 1 })
+        let dellHiDPI = coordinator.displays.first(where: { $0.displayID == 3 })
+
+        // Built-in Display exposes ProMotion Variable Refresh Rate and all fixed/NTSC rates
+        XCTAssertEqual(
+            builtIn?.refreshRateOptions.map(\.label),
+            ["24–120Hz (Variable)", "60Hz", "50Hz", "48Hz", "59.94Hz", "47.95Hz"]
+        )
+
+        // At 1920x1080 HiDPI (modeID 49), DELL P2217H exposes only compatible 60Hz (matching macOS System Settings)
+        XCTAssertEqual(dellHiDPI?.refreshRateOptions.map(\.label), ["60Hz"])
+
+        // Switching to 1920x1080 LoDPI (modeID 32) exposes compatible 60Hz and 50Hz (never 75Hz)
+        coordinator.selectDisplayMode(3, modeID: 32)
+        let dellLoDPI = coordinator.displays.first(where: { $0.displayID == 3 })
+        XCTAssertEqual(dellLoDPI?.refreshRateOptions.map(\.label), ["60Hz", "50Hz"])
+
+        // Genuine 1280x1024 @ 75Hz mode remains selectable and lists 75Hz & 60Hz
+        coordinator.selectDisplayMode(3, modeID: 21)
+        let dellSXGA = coordinator.displays.first(where: { $0.displayID == 3 })
+        XCTAssertEqual(dellSXGA?.refreshRateOptions.map(\.label), ["75Hz", "60Hz"])
+    }
 }
 
 @MainActor

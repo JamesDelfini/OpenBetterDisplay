@@ -29,6 +29,7 @@ public struct RawDisplayMode: Equatable, Sendable {
     public var bitsPerSample: Int
     public var isDefault: Bool
     public var isStretched: Bool
+    public var isMirroringOnly: Bool
     public var isVariableRefreshRate: Bool
     public var minRefreshRate: Double?
 
@@ -44,6 +45,7 @@ public struct RawDisplayMode: Equatable, Sendable {
         bitsPerSample: Int = 8,
         isDefault: Bool = false,
         isStretched: Bool = false,
+        isMirroringOnly: Bool = false,
         isVariableRefreshRate: Bool = false,
         minRefreshRate: Double? = nil
     ) {
@@ -58,6 +60,7 @@ public struct RawDisplayMode: Equatable, Sendable {
         self.bitsPerSample = bitsPerSample
         self.isDefault = isDefault
         self.isStretched = isStretched
+        self.isMirroringOnly = isMirroringOnly
         self.isVariableRefreshRate = isVariableRefreshRate
         self.minRefreshRate = minRefreshRate
     }

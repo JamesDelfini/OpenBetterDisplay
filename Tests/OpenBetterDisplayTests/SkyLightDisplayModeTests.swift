@@ -194,7 +194,8 @@ final class SkyLightDisplayModeTests: XCTestCase {
         ]
 
         let merged = MacOSDisplayDriver.mergeDisplayModes(cgModes: cgModes, skyLightModes: skyLightModes)
-        XCTAssertEqual(merged.map(\.modeID), [646, 71, 900])
+        // Unexposed SkyLight-only mode 900 must not be injected when CoreGraphics exposed modes exist.
+        XCTAssertEqual(merged.map(\.modeID), [646, 71])
 
         XCTAssertEqual(merged[0].bitsPerSample, 10)
         XCTAssertEqual(merged[0].isDefault, true)
@@ -205,9 +206,196 @@ final class SkyLightDisplayModeTests: XCTestCase {
         XCTAssertEqual(merged[1].bitsPerSample, 10)
         XCTAssertEqual(merged[1].isStretched, true)
         XCTAssertEqual(merged[1].isUsableForDesktopGUI, false)
+    }
 
-        XCTAssertEqual(merged[2].modeID, 900)
-        XCTAssertEqual(merged[2].bitsPerSample, 10)
+    func testSkyLightFallbackWhenCGModesEmptyExcludesMirroringOnlyModes() throws {
+        let normalFallback = try XCTUnwrap(
+            SkyLightDisplayModeDescription.parse(
+                bytes: makeValidModeBuffer(
+                    modeID: 32,
+                    flags: 0x0200_0007,
+                    ioFlags: 0x0200_0007,
+                    width: 1920,
+                    height: 1080,
+                    pixelWidth: 1920,
+                    pixelHeight: 1080,
+                    refreshRateFixed: 60 << 16
+                )
+            )
+        )
+        let mirroringOnly = try XCTUnwrap(
+            SkyLightDisplayModeDescription.parse(
+                bytes: makeValidModeBuffer(
+                    modeID: 48,
+                    flags: 0x0020_0001,
+                    ioFlags: 0x0020_0003,
+                    width: 1920,
+                    height: 1080,
+                    pixelWidth: 3840,
+                    pixelHeight: 2160,
+                    refreshRateFixed: 75 << 16
+                )
+            )
+        )
+
+        XCTAssertFalse(normalFallback.isMirroringOnly)
+        XCTAssertTrue(mirroringOnly.isMirroringOnly)
+
+        let mergedFallback = MacOSDisplayDriver.mergeDisplayModes(
+            cgModes: [],
+            skyLightModes: [normalFallback, mirroringOnly]
+        )
+        XCTAssertEqual(mergedFallback.map(\.modeID), [32])
+        XCTAssertFalse(MacOSDisplayDriver.shouldFallbackToSkyLightModeConfiguration(catalogModeCount: 10, matchedCatalogMode: false))
+        XCTAssertTrue(MacOSDisplayDriver.shouldFallbackToSkyLightModeConfiguration(catalogModeCount: 10, matchedCatalogMode: true))
+        XCTAssertTrue(MacOSDisplayDriver.shouldFallbackToSkyLightModeConfiguration(catalogModeCount: 0, matchedCatalogMode: false))
+    }
+
+    func testMergeDisplayModesExcludesUnexposedSkyLightMirroringAndOutOfPanelModesWhenCGModesExist() throws {
+        let p2217hCGModes: [RawDisplayMode] = [
+            RawDisplayMode(
+                modeID: 32,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 60.0,
+                isUsableForDesktopGUI: true,
+                isNative: true,
+                bitsPerSample: 8,
+                isDefault: true
+            ),
+            RawDisplayMode(
+                modeID: 33,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 1920,
+                pixelHeight: 1080,
+                refreshRate: 50.0,
+                isUsableForDesktopGUI: true,
+                isNative: true,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 49,
+                width: 1920,
+                height: 1080,
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                refreshRate: 60.0,
+                isUsableForDesktopGUI: true,
+                isNative: false,
+                bitsPerSample: 8
+            ),
+            RawDisplayMode(
+                modeID: 21,
+                width: 1280,
+                height: 1024,
+                pixelWidth: 1280,
+                pixelHeight: 1024,
+                refreshRate: 75.0,
+                isUsableForDesktopGUI: true,
+                isNative: false,
+                bitsPerSample: 8
+            )
+        ]
+
+        let mirror75Hz = try XCTUnwrap(
+            SkyLightDisplayModeDescription.parse(
+                bytes: makeValidModeBuffer(
+                    modeID: 48,
+                    flags: 0x0020_0001,
+                    ioFlags: 0x0020_0003,
+                    width: 1920,
+                    height: 1080,
+                    pixelWidth: 3840,
+                    pixelHeight: 2160,
+                    refreshRateFixed: 75 << 16
+                )
+            )
+        )
+        let mirror60Hz = try XCTUnwrap(
+            SkyLightDisplayModeDescription.parse(
+                bytes: makeValidModeBuffer(
+                    modeID: 49,
+                    flags: 0x0020_0001,
+                    ioFlags: 0x0020_0003,
+                    width: 1920,
+                    height: 1080,
+                    pixelWidth: 3840,
+                    pixelHeight: 2160,
+                    refreshRateFixed: 60 << 16
+                )
+            )
+        )
+        let mirror50Hz = try XCTUnwrap(
+            SkyLightDisplayModeDescription.parse(
+                bytes: makeValidModeBuffer(
+                    modeID: 50,
+                    flags: 0x0020_0001,
+                    ioFlags: 0x0020_0003,
+                    width: 1920,
+                    height: 1080,
+                    pixelWidth: 3840,
+                    pixelHeight: 2160,
+                    refreshRateFixed: 50 << 16
+                )
+            )
+        )
+        let outOfPanel1600x1200 = try XCTUnwrap(
+            SkyLightDisplayModeDescription.parse(
+                bytes: makeValidModeBuffer(
+                    modeID: 29,
+                    flags: 0x0000_0001,
+                    ioFlags: 0x0000_0003,
+                    width: 1600,
+                    height: 1200,
+                    pixelWidth: 1600,
+                    pixelHeight: 1200,
+                    refreshRateFixed: 60 << 16
+                )
+            )
+        )
+        var tenBitNative60Bytes = makeValidModeBuffer(
+            modeID: 32,
+            flags: 0x0200_0007,
+            ioFlags: 0x0200_0007,
+            width: 1920,
+            height: 1080,
+            pixelWidth: 1920,
+            pixelHeight: 1080,
+            refreshRateFixed: 60 << 16
+        )
+        writeUInt32LE(10, into: &tenBitNative60Bytes, offset: 0x1C)
+        let tenBitNative60 = try XCTUnwrap(SkyLightDisplayModeDescription.parse(bytes: tenBitNative60Bytes))
+
+        var mirror49Bytes = makeValidModeBuffer(
+            modeID: 49,
+            flags: 0x0020_0001,
+            ioFlags: 0x0020_0003,
+            width: 1920,
+            height: 1080,
+            pixelWidth: 3840,
+            pixelHeight: 2160,
+            refreshRateFixed: 60 << 16
+        )
+        writeUInt32LE(10, into: &mirror49Bytes, offset: 0x1C)
+        let tenBitMirror49 = try XCTUnwrap(SkyLightDisplayModeDescription.parse(bytes: mirror49Bytes))
+        _ = mirror60Hz
+
+        let merged = MacOSDisplayDriver.mergeDisplayModes(
+            cgModes: p2217hCGModes,
+            skyLightModes: [tenBitNative60, outOfPanel1600x1200, mirror75Hz, tenBitMirror49, mirror50Hz]
+        )
+
+        XCTAssertEqual(merged.map(\.modeID), [32, 33, 49, 21])
+        XCTAssertEqual(merged.first(where: { $0.modeID == 32 })?.bitsPerSample, 10)
+        // modeID 49 is in CGDisplayCopyAllDisplayModes even with 0x0020_0000 and must remain usable.
+        let preservedHiDPI60 = merged.first(where: { $0.modeID == 49 })
+        XCTAssertEqual(preservedHiDPI60?.isUsableForDesktopGUI, true)
+        XCTAssertEqual(preservedHiDPI60?.bitsPerSample, 10)
+        // Unexposed 75 Hz HiDPI, 50 Hz HiDPI, and 1600x1200 must never leak into the desktop catalog.
+        XCTAssertFalse(merged.contains(where: { $0.modeID == 48 || $0.modeID == 50 || $0.modeID == 29 }))
     }
 
     func testMergingSkyLightModesPreservesVariableRefreshRateAndMinRefreshRate() {

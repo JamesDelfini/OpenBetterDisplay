@@ -46,9 +46,11 @@ private final class PreviewDisplayDriver: DisplayDriver, @unchecked Sendable {
     func resetSoftwareGamma() {}
 }
 
-private final class PreviewBrightnessStore: BrightnessPersistence, @unchecked Sendable {
+private final class PreviewDisplayStore: BrightnessPersistence, DisplayModeFilterPersistence, @unchecked Sendable {
     func brightness(forKey key: String) -> Double? { nil }
     func setBrightness(_ level: Double, forKey key: String) {}
+    func modeFilter(forKey key: String) -> DisplayModeFilterCriteria? { nil }
+    func setModeFilter(_ filter: DisplayModeFilterCriteria?, forKey key: String) {}
 }
 
 @MainActor
@@ -57,6 +59,7 @@ private func renderPreview() {
     var outputPath = "/tmp/openbetterdisplay-preview.png"
     var expandMainID: UInt32?
     var expandModeID: UInt32?
+    var expandFilterID: UInt32?
     var disconnectID: UInt32?
 
     var index = 0
@@ -67,6 +70,9 @@ private func renderPreview() {
             index += 2
         } else if arg == "--expanded-mode", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             expandModeID = id
+            index += 2
+        } else if arg == "--expanded-filter", index + 1 < args.count, let id = UInt32(args[index + 1]) {
+            expandFilterID = id
             index += 2
         } else if arg == "--disconnect", index + 1 < args.count, let id = UInt32(args[index + 1]) {
             disconnectID = id
@@ -92,9 +98,11 @@ private func renderPreview() {
                 currentModeID: 12,
                 modes: [
                     RawDisplayMode(
-                        modeID: 10, width: 1147, height: 745, pixelWidth: 2294, pixelHeight: 1490, refreshRate: 120.0, bitsPerSample: 10),
+                        modeID: 10, width: 1147, height: 745, pixelWidth: 2294, pixelHeight: 1490, refreshRate: 120.0, bitsPerSample: 10,
+                        minRefreshRate: 24.0, isVariableRefreshRate: true),
                     RawDisplayMode(
-                        modeID: 11, width: 1352, height: 878, pixelWidth: 2704, pixelHeight: 1756, refreshRate: 120.0, bitsPerSample: 10),
+                        modeID: 11, width: 1352, height: 878, pixelWidth: 2704, pixelHeight: 1756, refreshRate: 120.0, bitsPerSample: 10,
+                        minRefreshRate: 24.0, isVariableRefreshRate: true),
                     RawDisplayMode(
                         modeID: 12,
                         width: 1512,
@@ -104,13 +112,20 @@ private func renderPreview() {
                         refreshRate: 120.0,
                         isNative: true,
                         bitsPerSample: 10,
-                        isDefault: true
+                        isDefault: true,
+                        minRefreshRate: 24.0,
+                        isVariableRefreshRate: true
                     ),
                     RawDisplayMode(
-                        modeID: 13, width: 1800, height: 1169, pixelWidth: 3600, pixelHeight: 2338, refreshRate: 120.0, bitsPerSample: 10),
+                        modeID: 13, width: 1800, height: 1169, pixelWidth: 3600, pixelHeight: 2338, refreshRate: 120.0, bitsPerSample: 10,
+                        minRefreshRate: 24.0, isVariableRefreshRate: true),
                     RawDisplayMode(
                         modeID: 14, width: 3024, height: 1964, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 120.0, isNative: true,
-                        bitsPerSample: 10)
+                        bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 15, width: 1512, height: 982, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 59.94, bitsPerSample: 10),
+                    RawDisplayMode(
+                        modeID: 16, width: 1512, height: 982, pixelWidth: 3024, pixelHeight: 1964, refreshRate: 47.95, bitsPerSample: 10)
                 ]
             ),
             RawDisplayInfo(
@@ -154,6 +169,9 @@ private func renderPreview() {
                     RawDisplayMode(
                         modeID: 33, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10),
                     RawDisplayMode(
+                        modeID: 41, width: 2560, height: 1440, pixelWidth: 5120, pixelHeight: 2880, refreshRate: 120.0, bitsPerSample: 10,
+                        minRefreshRate: 48.0, isVariableRefreshRate: true),
+                    RawDisplayMode(
                         modeID: 34, width: 2560, height: 1440, pixelWidth: 2560, pixelHeight: 1440, refreshRate: 60.0, bitsPerSample: 8),
                     RawDisplayMode(
                         modeID: 35, width: 3008, height: 1692, pixelWidth: 6016, pixelHeight: 3384, refreshRate: 120.0, bitsPerSample: 10),
@@ -165,6 +183,8 @@ private func renderPreview() {
                     RawDisplayMode(
                         modeID: 38, width: 3840, height: 2160, pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60.0, isNative: true,
                         bitsPerSample: 8),
+                    RawDisplayMode(
+                        modeID: 42, width: 1600, height: 1200, pixelWidth: 3200, pixelHeight: 2400, refreshRate: 60.0, bitsPerSample: 8),
                     RawDisplayMode(
                         modeID: 39, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60.0, bitsPerSample: 8),
                     RawDisplayMode(
@@ -179,17 +199,22 @@ private func renderPreview() {
         ]
     )
 
+    let previewStore = PreviewDisplayStore()
     let coordinator = DisplayCoordinator(
         driver: driver,
-        brightnessStore: PreviewBrightnessStore(),
-        ddcThrottleInterval: 0
+        brightnessStore: previewStore,
+        ddcThrottleInterval: 0,
+        modeFilterStore: previewStore
     )
 
     if let disconnectID {
         coordinator.setDisplayEnabled(disconnectID, enabled: false)
     }
 
-    if let expandModeID {
+    if let expandFilterID {
+        coordinator.toggleExpandedSection(.displayMode(expandFilterID))
+        coordinator.toggleDisplayModeFilter(expandFilterID)
+    } else if let expandModeID {
         coordinator.toggleExpandedSection(.displayMode(expandModeID))
     } else if let expandMainID {
         coordinator.toggleExpandedSection(.mainDisplay(expandMainID))

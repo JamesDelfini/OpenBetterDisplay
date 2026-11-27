@@ -129,6 +129,31 @@ final class InMemoryBrightnessStore: BrightnessPersistence, @unchecked Sendable 
     }
 }
 
+final class InMemoryDisplayModeFilterStore: DisplayModeFilterPersistence, @unchecked Sendable {
+    private let lock = NSLock()
+    private var filtersByKey: [String: DisplayModeFilterCriteria]
+
+    init(initialFilters: [String: DisplayModeFilterCriteria] = [:]) {
+        self.filtersByKey = initialFilters
+    }
+
+    func modeFilter(forKey key: String) -> DisplayModeFilterCriteria? {
+        lock.lock()
+        defer { lock.unlock() }
+        return filtersByKey[key]
+    }
+
+    func setModeFilter(_ filter: DisplayModeFilterCriteria?, forKey key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let filter {
+            filtersByKey[key] = filter
+        } else {
+            filtersByKey.removeValue(forKey: key)
+        }
+    }
+}
+
 @MainActor
 final class ImmediateBrightnessWriteScheduler: BrightnessWriteScheduling {
     private final class NoOpToken: BrightnessWriteCancellable {

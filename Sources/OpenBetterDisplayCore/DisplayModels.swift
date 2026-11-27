@@ -28,6 +28,8 @@ public struct RawDisplayMode: Equatable, Sendable {
     public var bitsPerSample: Int
     public var isDefault: Bool
     public var isStretched: Bool
+    public var minRefreshRate: Double?
+    public var isVariableRefreshRate: Bool
 
     public init(
         modeID: Int32,
@@ -40,7 +42,9 @@ public struct RawDisplayMode: Equatable, Sendable {
         isNative: Bool = false,
         bitsPerSample: Int = 8,
         isDefault: Bool = false,
-        isStretched: Bool = false
+        isStretched: Bool = false,
+        minRefreshRate: Double? = nil,
+        isVariableRefreshRate: Bool = false
     ) {
         self.modeID = modeID
         self.width = width
@@ -53,6 +57,8 @@ public struct RawDisplayMode: Equatable, Sendable {
         self.bitsPerSample = bitsPerSample
         self.isDefault = isDefault
         self.isStretched = isStretched
+        self.minRefreshRate = minRefreshRate
+        self.isVariableRefreshRate = isVariableRefreshRate
     }
 }
 
@@ -109,6 +115,127 @@ public enum ExpandedPopoverSection: Equatable, Sendable {
     }
 }
 
+public enum DisplayModeScalingTier: String, Codable, Equatable, Hashable, Sendable, CaseIterable {
+    case hiDPI
+    case loDPI
+
+    public var label: String {
+        switch self {
+        case .hiDPI:
+            return "HiDPI"
+        case .loDPI:
+            return "LoDPI"
+        }
+    }
+}
+
+public struct DisplayModeFilterCriteria: Codable, Equatable, Hashable, Sendable {
+    public var aspectRatios: Set<String>
+    public var refreshRates: Set<String>
+    public var colorDepths: Set<Int>
+    public var scalingTiers: Set<DisplayModeScalingTier>
+
+    public static let unrestricted = DisplayModeFilterCriteria()
+
+    public init(
+        aspectRatios: Set<String> = [],
+        refreshRates: Set<String> = [],
+        colorDepths: Set<Int> = [],
+        scalingTiers: Set<DisplayModeScalingTier> = []
+    ) {
+        self.aspectRatios = aspectRatios
+        self.refreshRates = refreshRates
+        self.colorDepths = colorDepths
+        self.scalingTiers = scalingTiers
+    }
+
+    public var isUnrestricted: Bool {
+        aspectRatios.isEmpty
+            && refreshRates.isEmpty
+            && colorDepths.isEmpty
+            && scalingTiers.isEmpty
+    }
+}
+
+public enum DisplayModeFilterChip: Equatable, Hashable, Sendable {
+    case aspectRatio(String)
+    case refreshRate(String)
+    case colorDepth(Int)
+    case scaling(DisplayModeScalingTier)
+}
+
+public struct DisplayModeFilterOptions: Equatable, Sendable {
+    public var aspectRatios: [String]
+    public var refreshRates: [String]
+    public var colorDepths: [Int]
+    public var scalingTiers: [DisplayModeScalingTier]
+
+    public init(
+        aspectRatios: [String] = [],
+        refreshRates: [String] = [],
+        colorDepths: [Int] = [],
+        scalingTiers: [DisplayModeScalingTier] = []
+    ) {
+        self.aspectRatios = aspectRatios
+        self.refreshRates = refreshRates
+        self.colorDepths = colorDepths
+        self.scalingTiers = scalingTiers
+    }
+
+    public var isEmpty: Bool {
+        aspectRatios.isEmpty
+            && refreshRates.isEmpty
+            && colorDepths.isEmpty
+            && scalingTiers.isEmpty
+    }
+
+    public func contains(_ chip: DisplayModeFilterChip) -> Bool {
+        switch chip {
+        case .aspectRatio(let label):
+            return aspectRatios.contains(label)
+        case .refreshRate(let label):
+            return refreshRates.contains(label)
+        case .colorDepth(let bits):
+            return colorDepths.contains(bits)
+        case .scaling(let tier):
+            return scalingTiers.contains(tier)
+        }
+    }
+}
+
+public struct DisplayModeFilterState: Equatable, Sendable {
+    public var availableOptions: DisplayModeFilterOptions
+    public var activeCriteria: DisplayModeFilterCriteria
+    public var isCustomized: Bool
+
+    public init(
+        availableOptions: DisplayModeFilterOptions = DisplayModeFilterOptions(),
+        activeCriteria: DisplayModeFilterCriteria = DisplayModeFilterCriteria(),
+        isCustomized: Bool = false
+    ) {
+        self.availableOptions = availableOptions
+        self.activeCriteria = activeCriteria
+        self.isCustomized = isCustomized
+    }
+
+    public var isShowingAll: Bool {
+        isCustomized && activeCriteria.isUnrestricted
+    }
+
+    public func isChipSelected(_ chip: DisplayModeFilterChip) -> Bool {
+        switch chip {
+        case .aspectRatio(let label):
+            return activeCriteria.aspectRatios.contains(label)
+        case .refreshRate(let label):
+            return activeCriteria.refreshRates.contains(label)
+        case .colorDepth(let bits):
+            return activeCriteria.colorDepths.contains(bits)
+        case .scaling(let tier):
+            return activeCriteria.scalingTiers.contains(tier)
+        }
+    }
+}
+
 public struct DisplayModeOption: Equatable, Identifiable, Sendable {
     public var modeID: Int32
     public var width: Int
@@ -116,6 +243,8 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
     public var pixelWidth: Int
     public var pixelHeight: Int
     public var refreshRate: Double
+    public var minRefreshRate: Double?
+    public var isVariableRefreshRate: Bool
     public var bitsPerSample: Int
     public var isHiDPI: Bool
     public var isDefault: Bool
@@ -127,6 +256,10 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
 
     public var id: Int32 { modeID }
 
+    public var scalingTier: DisplayModeScalingTier {
+        isHiDPI ? .hiDPI : .loDPI
+    }
+
     public init(
         modeID: Int32,
         width: Int,
@@ -134,6 +267,8 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
         pixelWidth: Int,
         pixelHeight: Int,
         refreshRate: Double,
+        minRefreshRate: Double? = nil,
+        isVariableRefreshRate: Bool = false,
         bitsPerSample: Int,
         isHiDPI: Bool,
         isDefault: Bool,
@@ -149,6 +284,8 @@ public struct DisplayModeOption: Equatable, Identifiable, Sendable {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.refreshRate = refreshRate
+        self.minRefreshRate = minRefreshRate
+        self.isVariableRefreshRate = isVariableRefreshRate
         self.bitsPerSample = bitsPerSample
         self.isHiDPI = isHiDPI
         self.isDefault = isDefault
@@ -184,6 +321,8 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
     public var brightness: Double
     public var brightnessBackend: BrightnessBackendUsed
     public var availableModes: [DisplayModeOption]
+    public var filteredModes: [DisplayModeOption]
+    public var modeFilterState: DisplayModeFilterState
     public var defaultMode: DisplayModeOption?
     public var nativeMode: DisplayModeOption?
     public var currentModeID: Int32
@@ -220,6 +359,8 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         brightness: Double = 1.0,
         brightnessBackend: BrightnessBackendUsed = .hardwareDDC,
         availableModes: [DisplayModeOption] = [],
+        filteredModes: [DisplayModeOption]? = nil,
+        modeFilterState: DisplayModeFilterState = DisplayModeFilterState(),
         defaultMode: DisplayModeOption? = nil,
         nativeMode: DisplayModeOption? = nil,
         currentModeID: Int32 = 0,
@@ -234,6 +375,8 @@ public struct DisplayState: Equatable, Identifiable, Sendable {
         self.brightness = brightness
         self.brightnessBackend = brightnessBackend
         self.availableModes = availableModes
+        self.filteredModes = filteredModes ?? availableModes
+        self.modeFilterState = modeFilterState
         self.defaultMode = defaultMode
         self.nativeMode = nativeMode
         self.currentModeID = currentModeID
